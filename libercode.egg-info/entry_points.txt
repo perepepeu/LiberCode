@@ -1,0 +1,2 @@
+[console_scripts]
+libercode = libercode.cli:main
