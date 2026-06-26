@@ -10,6 +10,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 from rich.text import Text
+from rich.status import Status
 import sys as _sys
 from prompt_toolkit import PromptSession as PTSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -58,6 +59,7 @@ class LiberAgent:
         self.provider = self._init_provider()
         self.session_id = self._init_session(project_root)
         self.turn_count = 0
+        self.total_tokens = 0
 
     def _init_provider(self):
         pc = self.config.provider
@@ -333,26 +335,48 @@ class LiberAgent:
     def _print_header(self):
         mode_colors = {"build": "green", "plan": "yellow", "spec": "blue"}
         color = mode_colors.get(self.mode, "white")
-        banner = (
-            "[bold cyan]"
-            "██╗     ██╗██████╗ ███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗\n"
-            "██║     ██║██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝\n"
-            "██║     ██║██████╔╝█████╗  ██████╔╝██║     ██║   ██║██║  ██║█████╗  \n"
-            "██║     ██║██╔══██╗██╔══╝  ██╔══██╗██║     ██║   ██║██║  ██║██╔══╝  \n"
-            "███████╗██║██████╔╝███████╗██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗\n"
-            "╚══════╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝[/]"
-        )
-        info = (
-            f"[bold {color}]{self.mode.capitalize()} Mode[/]  •  "
-            f"Session #{self.session_id}\n"
-            f"Provider: {self.provider.name}"
-        )
+        gradient_colors = ["bold cyan", "bold cyan", "bold green", "bold green", "bold green", "bold green"]
+        lines = [
+            "██╗     ██╗██████╗ ███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗",
+            "██║     ██║██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+            "██║     ██║██████╔╝█████╗  ██████╔╝██║     ██║   ██║██║  ██║█████╗  ",
+            "██║     ██║██╔══██╗██╔══╝  ██╔══██╗██║     ██║   ██║██║  ██║██╔══╝  ",
+            "███████╗██║██████╔╝███████╗██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗",
+            "╚══════╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+        ]
+        banner = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                banner.append("\n")
+            style = gradient_colors[min(i, len(gradient_colors) - 1)]
+            banner.append(line, style=style)
+        info = Text()
+        info.append("  Provider: ", style="dim")
+        info.append(self.provider.name, style="dim white")
+        content = Text()
+        content.append_text(banner)
+        content.append("\n\n")
+        content.append_text(info)
         header = Panel(
-            f"{banner}\n\n{info}",
-            border_style=color,
-            padding=(0, 1),
+            content,
+            border_style=f"dim {color}",
+            padding=(0, 2),
         )
         self.console.print(header)
+        self.console.print()
+
+    def _print_status_bar(self):
+        mode_color = {"build": "green", "plan": "yellow", "spec": "blue"}.get(self.mode, "white")
+        bar = Text()
+        bar.append("  [", style="dim")
+        bar.append("●", style="green")
+        bar.append(" Connected]  ", style="dim")
+        bar.append("Tokens: ", style="dim")
+        bar.append(str(self.total_tokens), style="dim white")
+        bar.append("  Mode: ", style="dim")
+        bar.append(self.mode.upper(), style=f"bold {mode_color}")
+        bar.append("\n")
+        self.console.print(bar)
 
     def _print_help(self):
         table = Table(box=box.SIMPLE, padding=(0, 1))
@@ -554,16 +578,25 @@ class LiberAgent:
             return None
 
     def _pt_prompt_text(self):
-        return ANSI(f"\x1b[1;{self._mode_color_code()}m{self.mode}\x1b[0m ")
+        mc = self._mode_color_code()
+        cwd = Path.cwd().resolve()
+        status = (
+            f"\x1b[2m"
+            f"[\x1b[32m●\x1b[0m\x1b[2m Connected]\x1b[0m"
+            f"  \x1b[2mTokens:\x1b[0m {self.total_tokens}"
+            f"  \x1b[2mMode:\x1b[0m \x1b[1;{mc}m{self.mode.upper()}\x1b[0m"
+            f"\x1b[0m"
+        )
+        prompt = f"\x1b[1;{mc}m{self.mode}\x1b[0m "
+        return ANSI(f"{status}\n{prompt}")
 
     def _mode_color_code(self):
         return {"build": "32", "plan": "33", "spec": "34"}.get(self.mode, "37")
 
     def run_interactive(self):
+        with self.console.status("[dim]Starting session...[/]", spinner="dots"):
+            time.sleep(0.4)
         self._print_header()
-        self.console.print(
-            "[dim]Type /help for available commands. /exit to quit.[/]\n"
-        )
 
         history = self.store.history_get(self.session_id, limit=30)
         pt_session = self._make_pt_session()
@@ -607,17 +640,16 @@ class LiberAgent:
             messages = self._build_messages(user_input, history)
             system = self._system_prompt()
 
-            self.console.print(f"[dim]{self.provider.name} thinking...[/]")
-
-            full_response = ""
-            try:
-                for chunk in self.provider.chat_stream(messages, system=system):
-                    full_response += chunk
-                    print(chunk, end="", flush=True)
-                print()
-            except Exception as e:
-                self.console.print(f"[red]Error: {e}[/]")
-                continue
+            with self.console.status(f"[dim]{self.provider.name} thinking...[/]", spinner="dots"):
+                full_response = ""
+                try:
+                    for chunk in self.provider.chat_stream(messages, system=system):
+                        full_response += chunk
+                        print(chunk, end="", flush=True)
+                except Exception as e:
+                    self.console.print(f"[red]Error: {e}[/]")
+                    continue
+            print()
 
             if not full_response.strip():
                 self.console.print("[yellow]Empty response. Retrying...[/]")
@@ -626,6 +658,7 @@ class LiberAgent:
             self.store.history_append(
                 self.session_id, "assistant", full_response, self.mode
             )
+            self.total_tokens += (len(user_input) + len(full_response)) // 4
 
             tool_result = self._process_response(full_response)
             if tool_result:
