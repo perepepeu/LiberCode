@@ -1,0 +1,6 @@
+{
+  "name": "devmate-demo",
+  "mode": "build",
+  "memory_tags": ["python", "terminal", "assistant"],
+  "ignored_dirs": [".git", "node_modules", "__pycache__", ".devmate"]
+}
