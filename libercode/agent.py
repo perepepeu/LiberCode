@@ -10,7 +10,6 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 from rich.text import Text
-from rich.status import Status
 import sys as _sys
 from prompt_toolkit import PromptSession as PTSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -332,9 +331,7 @@ class LiberAgent:
     def _check_stop_condition(self, task_id: int) -> dict:
         return self.stop_checker.auto_check(task_id, self.mode)
 
-    def _print_header(self):
-        mode_colors = {"build": "green", "plan": "yellow", "spec": "blue"}
-        color = mode_colors.get(self.mode, "white")
+    def _print_hero(self):
         gradient_colors = ["bold cyan", "bold cyan", "bold green", "bold green", "bold green", "bold green"]
         lines = [
             "██╗     ██╗██████╗ ███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -348,35 +345,33 @@ class LiberAgent:
         for i, line in enumerate(lines):
             if i > 0:
                 banner.append("\n")
-            style = gradient_colors[min(i, len(gradient_colors) - 1)]
-            banner.append(line, style=style)
-        info = Text()
-        info.append("  Provider: ", style="dim")
-        info.append(self.provider.name, style="dim white")
-        content = Text()
-        content.append_text(banner)
-        content.append("\n\n")
-        content.append_text(info)
-        header = Panel(
-            content,
-            border_style=f"dim {color}",
-            padding=(0, 2),
-        )
-        self.console.print(header)
+            banner.append(line, style=gradient_colors[min(i, len(gradient_colors) - 1)])
+        self.console.print(Panel(banner, border_style="dim cyan", padding=(0, 2)))
         self.console.print()
 
-    def _print_status_bar(self):
-        mode_color = {"build": "green", "plan": "yellow", "spec": "blue"}.get(self.mode, "white")
+    def _print_context_bar(self):
+        mode_colors = {"build": "green", "plan": "yellow", "spec": "blue"}
+        color = mode_colors.get(self.mode, "white")
         bar = Text()
-        bar.append("  [", style="dim")
-        bar.append("●", style="green")
-        bar.append(" Connected]  ", style="dim")
-        bar.append("Tokens: ", style="dim")
-        bar.append(str(self.total_tokens), style="dim white")
-        bar.append("  Mode: ", style="dim")
-        bar.append(self.mode.upper(), style=f"bold {mode_color}")
-        bar.append("\n")
-        self.console.print(bar)
+        bar.append(f" {self.mode.capitalize()} ", style=f"bold {color}")
+        bar.append("· ", style="dim")
+        bar.append(self.provider.name, style="dim white")
+        bar.append(" · ", style="dim")
+        bar.append(f"Session #{self.session_id}", style="dim")
+        bar.append(" · ", style="dim")
+        bar.append("Connected", style="green")
+        self.console.print(Panel(bar, border_style="dim", padding=(0, 1)))
+
+    def _print_quick_actions(self):
+        actions = Text()
+        actions.append("  /mode", style="bold cyan")
+        actions.append("   ", style="dim")
+        actions.append("@attach", style="bold cyan")
+        actions.append("   ", style="dim")
+        actions.append("$agent", style="bold cyan")
+        actions.append("   ", style="dim")
+        actions.append("/commands", style="bold cyan")
+        self.console.print(actions)
 
     def _print_help(self):
         table = Table(box=box.SIMPLE, padding=(0, 1))
@@ -579,16 +574,17 @@ class LiberAgent:
 
     def _pt_prompt_text(self):
         mc = self._mode_color_code()
-        cwd = Path.cwd().resolve()
-        status = (
+        mode_color = {"build": "32", "plan": "33", "spec": "34"}.get(self.mode, "37")
+        ctx = (
             f"\x1b[2m"
-            f"[\x1b[32m●\x1b[0m\x1b[2m Connected]\x1b[0m"
-            f"  \x1b[2mTokens:\x1b[0m {self.total_tokens}"
-            f"  \x1b[2mMode:\x1b[0m \x1b[1;{mc}m{self.mode.upper()}\x1b[0m"
+            f"{self.mode.capitalize()} \x1b[0m\x1b[2m· \x1b[0m"
+            f"\x1b[2m{self.provider.name} \x1b[0m\x1b[2m· \x1b[0m"
+            f"\x1b[2mSession #{self.session_id} \x1b[0m\x1b[2m· \x1b[0m"
+            f"\x1b[32mConnected\x1b[0m"
             f"\x1b[0m"
         )
         prompt = f"\x1b[1;{mc}m{self.mode}\x1b[0m "
-        return ANSI(f"{status}\n{prompt}")
+        return ANSI(f"{ctx}\n{prompt}")
 
     def _mode_color_code(self):
         return {"build": "32", "plan": "33", "spec": "34"}.get(self.mode, "37")
@@ -596,7 +592,10 @@ class LiberAgent:
     def run_interactive(self):
         with self.console.status("[dim]Starting session...[/]", spinner="dots"):
             time.sleep(0.4)
-        self._print_header()
+        self._print_hero()
+        self._print_context_bar()
+        self._print_quick_actions()
+        self.console.print()
 
         history = self.store.history_get(self.session_id, limit=30)
         pt_session = self._make_pt_session()
@@ -640,15 +639,16 @@ class LiberAgent:
             messages = self._build_messages(user_input, history)
             system = self._system_prompt()
 
-            with self.console.status(f"[dim]{self.provider.name} thinking...[/]", spinner="dots"):
-                full_response = ""
-                try:
-                    for chunk in self.provider.chat_stream(messages, system=system):
-                        full_response += chunk
-                        print(chunk, end="", flush=True)
-                except Exception as e:
-                    self.console.print(f"[red]Error: {e}[/]")
-                    continue
+            self.console.print(f"[dim]{self.provider.name} thinking...[/]")
+
+            full_response = ""
+            try:
+                for chunk in self.provider.chat_stream(messages, system=system):
+                    full_response += chunk
+                    print(chunk, end="", flush=True)
+            except Exception as e:
+                self.console.print(f"[red]Error: {e}[/]")
+                continue
             print()
 
             if not full_response.strip():
