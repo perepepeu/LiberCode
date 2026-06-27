@@ -519,6 +519,35 @@ class LiberAgent:
             self.console.print(Panel(system, title="System Prompt", border_style="dim"))
             return True
 
+        if cmd.startswith("/export"):
+            import json as _json
+            parts = cmd.split(maxsplit=1)
+            export_path = parts[1].strip() if len(parts) > 1 else "libercode_export.json"
+            data = {
+                "memory": self.memory.all(),
+                "tasks": self.tasks.list(),
+                "mode": self.mode,
+            }
+            Path(export_path).write_text(_json.dumps(data, indent=2, default=str))
+            self.console.print(f"[green]Exported to {export_path}[/]")
+            return True
+
+        if cmd.startswith("/import"):
+            import json as _json
+            parts = cmd.split(maxsplit=1)
+            if len(parts) < 2:
+                self.console.print("[red]Usage: /import <path>[/]")
+                return True
+            import_path = parts[1].strip()
+            if not Path(import_path).exists():
+                self.console.print(f"[red]File not found: {import_path}[/]")
+                return True
+            data = _json.loads(Path(import_path).read_text())
+            for item in data.get("memory", []):
+                self.memory.remember(item["key"], item.get("value", ""), item.get("category", "general"))
+            self.console.print(f"[green]Imported memory from {import_path}[/]")
+            return True
+
         if cmd in ("/exit", "/quit"):
             self.console.print("[yellow]Ending session...[/]")
             summary = f"Last mode: {self.mode}, turns: {self.turn_count}"
