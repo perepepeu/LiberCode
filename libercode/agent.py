@@ -45,7 +45,7 @@ class LiberAgent:
         self.shell = ShellExecutor(workdir=str(project_root))
         self.git = GitHelper(workdir=str(project_root))
         self.memory = ProjectMemory(self.store)
-        self.checkpointer = Checkpointer(self.store, str(project_root))
+        self.checkpointer = Checkpointer(self.store, str(project_root), self.git)
         self.tasks = TaskTracker(self.store)
         self.scratch = ScratchNotes(self.store)
         self.stop_checker = StopConditionChecker(

@@ -5,9 +5,10 @@ from typing import Optional
 
 
 class Checkpointer:
-    def __init__(self, store, project_root: str):
+    def __init__(self, store, project_root: str, git_helper=None):
         self._store = store
         self._project_root = Path(project_root)
+        self._git = git_helper
 
     def save(self, task_id: Optional[int] = None, summary: str = "checkpoint") -> str:
         cid = f"cp_{int(time.time())}_{summary[:20].replace(' ', '_')}"
@@ -46,16 +47,7 @@ class Checkpointer:
         return snapshot
 
     def _git_snapshot(self) -> str:
-        import subprocess
-
-        try:
-            result = subprocess.run(
-                ["git", "diff", "--stat"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=str(self._project_root),
-            )
-            return result.stdout.strip()
-        except Exception:
-            return ""
+        if self._git and self._git.is_repo():
+            result = self._git.diff()
+            return result.get("stdout", "")
+        return ""
