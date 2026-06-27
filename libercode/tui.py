@@ -149,10 +149,9 @@ class LibercodeUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
-            yield Static("◆", id="logo-text")
-            yield Static(" libercode", id="logo-text")
+            yield Static("◆ libercode", id="logo-text")
             yield Static(f" {self.current_model}", id="model-badge")
-            yield Static(f" {self.theme_data_name}", id="theme-badge")
+            yield Static(f" {self.theme_name}", id="theme-badge")
             yield Static("0 tokens", id="token-counter")
         with ScrollableContainer(id="chat-area"):
             yield RichLog(id="chat-log", markup=True, highlight=True)
