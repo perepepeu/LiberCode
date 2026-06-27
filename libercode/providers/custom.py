@@ -1,16 +1,7 @@
 import json
-import sys
-import time
 import requests
 from typing import Optional, Generator
-from libercode.providers.base import BaseProvider
-
-MAX_RETRIES = 3
-BACKOFF_BASE = 2
-
-
-def _log_retry(attempt: int, wait: int):
-    print(f"\r  [Retry {attempt + 1}/{MAX_RETRIES}] Waiting {wait}s...", end="", flush=True)
+from libercode.providers.base import BaseProvider, request_with_retry
 
 
 class CustomProvider(BaseProvider):
@@ -44,39 +35,6 @@ class CustomProvider(BaseProvider):
         else:
             h["Authorization"] = f"Bearer {self._api_key}"
         return h
-
-    def _request_with_retry(self, url: str, payload: dict, stream: bool = False):
-        for attempt in range(MAX_RETRIES):
-            try:
-                resp = requests.post(
-                    url, json=payload, headers=self._headers(), stream=stream, timeout=120
-                )
-                if resp.status_code == 429:
-                    wait = BACKOFF_BASE ** attempt
-                    _log_retry(attempt, wait)
-                    time.sleep(wait)
-                    continue
-                if resp.status_code >= 500:
-                    wait = BACKOFF_BASE ** attempt
-                    _log_retry(attempt, wait)
-                    time.sleep(wait)
-                    continue
-                return resp
-            except requests.ConnectionError:
-                if attempt < MAX_RETRIES - 1:
-                    wait = BACKOFF_BASE ** attempt
-                    _log_retry(attempt, wait)
-                    time.sleep(wait)
-                    continue
-                raise
-            except requests.Timeout:
-                if attempt < MAX_RETRIES - 1:
-                    wait = BACKOFF_BASE ** attempt
-                    _log_retry(attempt, wait)
-                    time.sleep(wait)
-                    continue
-                raise
-        return None
 
     def _build_payload(
         self,
@@ -130,7 +88,7 @@ class CustomProvider(BaseProvider):
         url = f"{self._api_base}/chat/completions"
         payload = self._build_payload(messages, system, temperature, max_tokens)
         try:
-            resp = self._request_with_retry(url, payload)
+            resp = request_with_retry(url, payload, headers=self._headers())
             if resp is None:
                 return "[Error] Max retries exceeded"
             if resp.status_code == 200:
@@ -151,7 +109,7 @@ class CustomProvider(BaseProvider):
         url = f"{self._api_base}/messages"
         payload = self._build_payload(messages, system, temperature, max_tokens)
         try:
-            resp = self._request_with_retry(url, payload)
+            resp = request_with_retry(url, payload, headers=self._headers())
             if resp is None:
                 return "[Error] Max retries exceeded"
             if resp.status_code == 200:
@@ -188,7 +146,7 @@ class CustomProvider(BaseProvider):
             messages, system, temperature, max_tokens, stream=True
         )
         try:
-            resp = self._request_with_retry(url, payload, stream=True)
+            resp = request_with_retry(url, payload, stream=True, headers=self._headers())
             if resp is None:
                 yield "[Error] Max retries exceeded"
                 return
@@ -221,7 +179,7 @@ class CustomProvider(BaseProvider):
             messages, system, temperature, max_tokens, stream=True
         )
         try:
-            resp = self._request_with_retry(url, payload, stream=True)
+            resp = request_with_retry(url, payload, stream=True, headers=self._headers())
             if resp is None:
                 yield "[Error] Max retries exceeded"
                 return
