@@ -42,7 +42,7 @@ class LiberConfig:
     provider: ProviderConfig = field(default_factory=ProviderConfig.builtin_defaults)
     mode: str = DEFAULT_MODE
     data_dir: str = str(DATA_DIR)
-    max_turns: int = 100
+    max_turns: int = 30
     verbose: bool = False
     enable_checkpoints: bool = True
     checkpoint_interval: int = 5
