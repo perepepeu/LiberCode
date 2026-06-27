@@ -25,10 +25,10 @@ class BuiltinProvider(BaseProvider):
     def name(self) -> str:
         return f"builtin/{self._model}"
 
-    def _request_with_retry(self, url: str, payload: dict, stream: bool = False):
+    def _request_with_retry(self, url: str, payload: dict, stream: bool = False, headers: dict = None):
         for attempt in range(MAX_RETRIES):
             try:
-                resp = requests.post(url, json=payload, stream=stream, timeout=120)
+                resp = requests.post(url, json=payload, headers=headers or {}, stream=stream, timeout=120)
                 if resp.status_code == 429:
                     wait = BACKOFF_BASE ** attempt
                     _log_retry(attempt, wait)
@@ -69,8 +69,13 @@ class BuiltinProvider(BaseProvider):
             "max_tokens": max_tokens or 4096,
             "temperature": temperature or 0.7,
         }
+        headers = {}
+        import os
+        token = os.environ.get("HF_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            resp = self._request_with_retry(url, payload)
+            resp = self._request_with_retry(url, payload, headers=headers)
             if resp is None:
                 return "[Error] Max retries exceeded"
             if resp.status_code == 200:
@@ -97,8 +102,13 @@ class BuiltinProvider(BaseProvider):
             "temperature": temperature or 0.7,
             "stream": True,
         }
+        headers = {}
+        import os
+        token = os.environ.get("HF_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            resp = self._request_with_retry(url, payload, stream=True)
+            resp = self._request_with_retry(url, payload, stream=True, headers=headers)
             if resp is None:
                 yield "[Error] Max retries exceeded"
                 return
