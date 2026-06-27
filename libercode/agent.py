@@ -308,6 +308,8 @@ class LiberAgent:
         return None
 
     def _exec_shell(self, cmd: str) -> str:
+        if self.mode == "plan":
+            return "[Error] Cannot execute shell commands in plan mode."
         result = self.shell.run(cmd)
         if result["success"]:
             output = result["stdout"][:2000] if result["stdout"] else "(no output)"
