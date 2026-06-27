@@ -141,17 +141,15 @@ class LibercodeUI(App):
     spinner_frame = reactive(0)
 
     def __init__(self, theme_name: str = "dracula", model: str = DEFAULT_MODEL):
+        self._init_theme_name = theme_name
+        self._init_model = model
         super().__init__()
-        self.theme_data_name = theme_name
-        self.theme_data = THEMES[theme_name]
-        self.current_model = model
-        self._spinner_interval = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
             yield Static("◆ libercode", id="logo-text")
-            yield Static(f" {self.current_model}", id="model-badge")
-            yield Static(f" {self.theme_name}", id="theme-badge")
+            yield Static(f" {self._init_model}", id="model-badge")
+            yield Static(f" {self._init_theme_name}", id="theme-badge")
             yield Static("0 tokens", id="token-counter")
         with ScrollableContainer(id="chat-area"):
             yield RichLog(id="chat-log", markup=True, highlight=True)
@@ -162,6 +160,10 @@ class LibercodeUI(App):
             yield Static("^C quit  ^T theme  ^N session  ^L clear  Esc cancel", id="hint-bar")
 
     def on_mount(self) -> None:
+        self.theme_data_name = self._init_theme_name
+        self.theme_data = THEMES[self._init_theme_name]
+        self.current_model = self._init_model
+        self._spinner_interval = None
         self._apply_theme(self.theme_data_name)
         self._write_logo()
 
@@ -169,15 +171,10 @@ class LibercodeUI(App):
         self.theme_data_name = name
         self.theme_data = THEMES[name]
         t = self.theme_data
-        self.screen.styles.background = t["bg"]
-        for var, key in [
-            ("bg", "bg"), ("bg_panel", "bg_panel"), ("bg_input", "bg_input"),
-            ("border", "border"), ("border_act", "border_act"),
-            ("primary", "primary"), ("secondary", "secondary"), ("accent", "accent"),
-            ("text", "text"), ("muted", "muted"),
-            ("error", "error"), ("warning", "warning"), ("success", "success"), ("info", "info"),
-        ]:
-            self.screen.styles.set_variation(var, t[key])
+        try:
+            self.screen.styles.background = t["bg"]
+        except Exception:
+            pass
         try:
             self.query_one("#theme-badge").update(f" {name}")
         except Exception:
