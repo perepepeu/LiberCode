@@ -1,5 +1,7 @@
+import asyncio
 import re
 from datetime import datetime
+
 from rich.align import Align
 from rich.markdown import Markdown as RichMarkdown
 from rich.panel import Panel
@@ -9,9 +11,10 @@ from rich.text import Text
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.reactive import reactive
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Static, Input, RichLog
+from textual.reactive import reactive
+from textual.widgets import Input, RichLog, Static
+from textual.widgets import Label
 
 THEMES = {
     "dracula": {
@@ -58,18 +61,18 @@ THEMES = {
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-LOGO = (
-    "██╗     ██╗██████╗ ███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗\n"
-    "██║     ██║██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝\n"
-    "██║     ██║██████╔╝█████╗  ██████╔╝██║     ██║   ██║██║  ██║█████╗  \n"
-    "██║     ██║██╔══██╗██╔══╝  ██╔══██╗██║     ██║   ██║██║  ██║██╔══╝  \n"
-    "███████╗██║██████╔╝███████╗██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗\n"
-    "╚══════╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝"
-)
-
 DEFAULT_MODEL = "Qwen2.5-Coder-7B-Instruct"
 
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+LOGO_LINES = [
+    "██╗     ██╗██████╗ ███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗",
+    "██║     ██║██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+    "██║     ██║██████╔╝█████╗  ██████╔╝██║     ██║   ██║██║  ██║█████╗  ",
+    "██║     ██║██╔══██╗██╔══╝  ██╔══██╗██║     ██║   ██║██║  ██║██╔══╝  ",
+    "███████╗██║██████╔╝███████╗██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗",
+    "╚══════╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+]
 
 
 def _detect_lang(code: str) -> str:
@@ -84,66 +87,126 @@ def _detect_lang(code: str) -> str:
 
 class LibercodeUI(App):
     CSS = """
-    $bg: #282a36;
-    $bg_panel: #1e1f29;
-    $bg_input: #21222c;
-    $border: #6272a4;
+    $bg:         #282a36;
+    $bg_panel:   #1e1f29;
+    $bg_input:   #21222c;
+    $border:     #6272a4;
     $border_act: #bd93f9;
-    $primary: #bd93f9;
-    $secondary: #ff79c6;
-    $accent: #50fa7b;
-    $text: #f8f8f2;
-    $muted: #6272a4;
-    $error: #ff5555;
-    $warning: #ffb86c;
-    $success: #50fa7b;
-    $info: #8be9fd;
+    $primary:    #bd93f9;
+    $secondary:  #ff79c6;
+    $accent:     #50fa7b;
+    $text:       #f8f8f2;
+    $muted:      #6272a4;
 
-    Screen { background: $bg; }
-
-    #header-bar {
-        height: 3; background: $bg_panel;
-        border-bottom: tall $border; padding: 0 2;
-        align: left middle;
-    }
-    #logo-text { color: $primary; text-style: bold; }
-    #model-badge { color: $muted; margin-left: 2; }
-    #theme-badge { color: $accent; margin-left: 1; }
-    #header-spacer { width: 1fr; }
-    #token-counter { color: $muted; margin-right: 2; }
-
-    #chat-area {
-        height: 1fr; overflow-y: auto; padding: 2 3;
+    Screen {
         background: $bg;
+        layers: base;
+    }
+
+    /* ── HEADER ── */
+    #header-bar {
+        height: 3;
+        background: $bg_panel;
+        border-bottom: tall $border;
+        padding: 0 2;
+        align-vertical: middle;
+    }
+    #logo-text {
+        color: $primary;
+        text-style: bold;
+        width: auto;
+    }
+    #model-badge {
+        color: $muted;
+        width: auto;
+        margin-left: 2;
+    }
+    #theme-badge {
+        color: $accent;
+        width: auto;
+        margin-left: 1;
+    }
+    #spacer {
+        width: 1fr;
+    }
+    #token-counter {
+        color: $muted;
+        width: auto;
+        margin-right: 2;
+        text-align: right;
+    }
+
+    /* ── LOGO AREA ── */
+    #logo-area {
+        height: auto;
+        background: $bg;
+        padding: 1 0;
+        text-align: center;
+        color: $primary;
+        text-style: bold;
+    }
+
+    /* ── CHAT AREA ── */
+    #chat-area {
+        height: 1fr;
+        background: $bg;
+        padding: 0 2;
         scrollbar-size: 1 1;
         scrollbar-color: $border;
         scrollbar-color-hover: $primary;
+        scrollbar-background: $bg;
+    }
+    #chat-log {
+        height: auto;
+        background: $bg;
+        padding: 1 0;
     }
 
+    /* ── INPUT AREA ── */
     #input-area {
-        height: auto; min-height: 5; max-height: 10;
+        height: auto;
+        min-height: 5;
+        max-height: 12;
         background: $bg_panel;
-        border-top: solid $border; padding: 1 2;
+        border-top: tall $border;
+        padding: 1 2;
     }
-    #prompt-row { height: auto; align: left middle; }
-    #prompt-icon { color: $primary; width: 3; margin-right: 1; }
+    #prompt-row {
+        height: auto;
+        align-vertical: middle;
+    }
+    #prompt-icon {
+        color: $primary;
+        width: 3;
+        margin-right: 1;
+    }
     #prompt-input {
-        height: auto; min-height: 1; width: 1fr;
-        border: solid $border;
-        background: $bg_input; color: $text; padding: 0 1;
-        transition: border 200ms;
+        height: auto;
+        min-height: 1;
+        width: 1fr;
+        background: $bg_input;
+        color: $text;
+        border: round $border;
+        padding: 0 1;
     }
-    #prompt-input:focus { border: solid $border_act; }
-    #hint-bar { height: 1; color: $muted; margin-top: 1; }
+    #prompt-input:focus {
+        border: round $border_act;
+    }
+    #hint-bar {
+        height: 1;
+        color: $muted;
+        margin-top: 1;
+        padding-left: 4;
+    }
     """
 
     CTRL_C_QUIT = False
     BINDINGS = [
-        Binding("ctrl+c", "quit", "quit", priority=True),
-        Binding("ctrl+t", "cycle_theme", "theme", priority=True),
-        Binding("ctrl+n", "new_session", "session", priority=True),
-        Binding("ctrl+l", "clear_chat", "clear", priority=True),
-        Binding("escape", "cancel_action", "cancel", priority=True),
+        Binding("ctrl+c", "quit",          "quit",    priority=True, show=False),
+        Binding("ctrl+t", "cycle_theme",   "theme",   priority=True, show=False),
+        Binding("ctrl+n", "new_session",   "session", priority=True, show=False),
+        Binding("ctrl+l", "clear_chat",    "clear",   priority=True, show=False),
+        Binding("escape", "cancel_action", "cancel",  priority=True, show=False),
     ]
 
     THEME_NAMES = list(THEMES.keys())
@@ -153,98 +216,117 @@ class LibercodeUI(App):
     current_model = reactive(DEFAULT_MODEL)
     spinner_frame = reactive(0)
 
-    def __init__(self, theme_name: str = "dracula", model: str = DEFAULT_MODEL):
-        self._init_theme_name = theme_name
+    def __init__(self, theme_name="dracula", model=DEFAULT_MODEL):
+        self._init_theme = theme_name
         self._init_model = model
+        self.theme_data = THEMES[theme_name]
+        self.theme_data_name = theme_name
+        self._spinner_interval = None
         super().__init__()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
-            yield Static(
-                Text.assemble(
-                    ("◆ ", Style(bold=True)),
-                    ("libercode", Style(bold=True)),
-                ),
-                id="logo-text",
-            )
-            yield Static(f" {self._init_model}", id="model-badge")
-            yield Static(f" {self._init_theme_name}", id="theme-badge")
-            yield Static("", id="header-spacer")
+            yield Static("◆ libercode", id="logo-text")
+            yield Static("", id="model-badge")
+            yield Static("", id="theme-badge")
+            yield Static("", id="spacer")
             yield Static("0 tokens", id="token-counter")
+        yield Static("", id="logo-area")
         with ScrollableContainer(id="chat-area"):
-            yield RichLog(id="chat-log", markup=True, highlight=True)
+            yield RichLog(id="chat-log", markup=True, highlight=True, wrap=True)
         with Vertical(id="input-area"):
             with Horizontal(id="prompt-row"):
                 yield Static("›", id="prompt-icon")
                 yield Input(placeholder="Type a message...", id="prompt-input")
-            yield Static(Text(), id="hint-bar")
+            yield Static("", id="hint-bar")
 
     def on_mount(self) -> None:
-        self.theme_data_name = self._init_theme_name
-        self.theme_data = THEMES[self._init_theme_name]
         self.current_model = self._init_model
-        self._spinner_interval = None
-        self.call_later(self._on_mounted)
+        self.call_later(self._post_mount)
 
-    async def _on_mounted(self) -> None:
-        self._apply_theme(self.theme_data_name)
+    async def _post_mount(self) -> None:
+        self._apply_theme(self._init_theme)
         self._build_hint_bar()
-        await self._write_logo_animated()
+        await self._animate_logo()
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
         self.theme_data = THEMES[name]
         t = self.theme_data
-        try:
-            self.screen.styles.background = t["bg"]
-        except Exception:
-            pass
-        try:
-            header = self.query_one("#header-bar", Horizontal)
-            header.styles.background = t["bg_panel"]
-            header.styles.border_bottom = ("tall", t["border"])
-        except Exception:
-            pass
-        try:
-            chat = self.query_one("#chat-area", ScrollableContainer)
-            chat.styles.background = t["bg"]
-            chat.styles.scrollbar_color = t["border"]
-            chat.styles.scrollbar_color_hover = t["primary"]
-        except Exception:
-            pass
-        try:
-            inp_area = self.query_one("#input-area", Vertical)
-            inp_area.styles.background = t["bg_panel"]
-            inp_area.styles.border_top = ("solid", t["border"])
-        except Exception:
-            pass
-        try:
-            inp = self.query_one("#prompt-input", Input)
-            inp.styles.background = t["bg_input"]
-            inp.styles.color = t["text"]
-            inp.styles.border = ("solid", t["border"])
-        except Exception:
-            pass
-        try:
-            icon = self.query_one("#prompt-icon", Static)
-            icon.styles.color = t["primary"]
-        except Exception:
-            pass
-        try:
-            badge = self.query_one("#theme-badge", Static)
-            badge.update(
-                Text(f" {name}", style=Style(color=t["accent"]))
-            )
-        except Exception:
-            pass
-        try:
-            model_badge = self.query_one("#model-badge", Static)
-            model_badge.update(
-                Text(f" {self.current_model}", style=Style(color=t["muted"]))
-            )
-        except Exception:
-            pass
+
+        self.screen.styles.background = t["bg"]
+
+        w = self.query_one("#header-bar")
+        w.styles.background = t["bg_panel"]
+        w.styles.border_bottom = ("tall", t["border"])
+
+        self.query_one("#logo-text").styles.color = t["primary"]
+
+        self.query_one("#model-badge").update(
+            Text(f" {self.current_model}", style=Style(color=t["muted"]))
+        )
+        self.query_one("#theme-badge").update(
+            Text(f" {name}", style=Style(color=t["accent"]))
+        )
+
+        self._refresh_token_color()
+
+        w = self.query_one("#logo-area")
+        w.styles.background = t["bg"]
+        w.styles.color = t["primary"]
+
+        w = self.query_one("#chat-area")
+        w.styles.background = t["bg"]
+        w.styles.scrollbar_color = t["border"]
+        w.styles.scrollbar_color_hover = t["primary"]
+        w.styles.scrollbar_background = t["bg"]
+
+        self.query_one("#chat-log").styles.background = t["bg"]
+
+        w = self.query_one("#input-area")
+        w.styles.background = t["bg_panel"]
+        w.styles.border_top = ("tall", t["border"])
+
+        w = self.query_one("#prompt-input")
+        w.styles.background = t["bg_input"]
+        w.styles.color = t["text"]
+        w.styles.border = ("round", t["border"])
+
+        self.query_one("#prompt-icon").styles.color = t["primary"]
+
         self._build_hint_bar()
+
+    async def _animate_logo(self) -> None:
+        t = self.theme_data
+        logo_widget = self.query_one("#logo-area", Static)
+
+        logo_text = Text()
+        for i, line in enumerate(LOGO_LINES):
+            logo_text.append(line + "\n", Style(color=t["primary"], bold=True))
+        logo_widget.update(logo_text)
+
+        log = self.query_one("#chat-log", RichLog)
+        await asyncio.sleep(0.05)
+
+        welcome = Text()
+        welcome.append("  Welcome to ", Style(color=t["muted"]))
+        welcome.append("libercode", Style(color=t["primary"], bold=True))
+        welcome.append(" — AI in your terminal\n", Style(color=t["muted"]))
+        log.write(welcome)
+        await asyncio.sleep(0.05)
+
+        info = Text()
+        info.append("  Model: ", Style(color=t["muted"]))
+        info.append(self.current_model, Style(color=t["accent"]))
+        info.append("  |  Theme: ", Style(color=t["muted"]))
+        info.append(self.theme_data_name, Style(color=t["secondary"]))
+        info.append("  |  ", Style(color=t["muted"]))
+        info.append(datetime.now().strftime("%H:%M %d/%m/%Y"), Style(color=t["muted"]))
+        log.write(info)
+        await asyncio.sleep(0.05)
+
+        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+        log.write(Text(""))
 
     def _build_hint_bar(self) -> None:
         t = self.theme_data
@@ -254,74 +336,38 @@ class LibercodeUI(App):
             ("^L", "clear"), ("Esc", "cancel"),
         ]:
             hint.append(f" {key}", Style(color=t["accent"], bold=True))
-            hint.append(f" {label} ", Style(color=t["muted"]))
+            hint.append(f" {label}  ", Style(color=t["muted"]))
         try:
-            bar = self.query_one("#hint-bar", Static)
-            bar.update(hint)
+            self.query_one("#hint-bar", Static).update(hint)
         except Exception:
             pass
 
-    async def _write_logo_animated(self) -> None:
-        log = self.query_one("#chat-log", RichLog)
+    def _refresh_token_color(self) -> None:
         t = self.theme_data
-        import asyncio
-        w = self.size.width
-        for i, line in enumerate(LOGO.split("\n")):
-            log.write(Align.center(
-                Text(line, style=Style(color=t["primary"], bold=True)),
-                width=w,
-            ))
-            await asyncio.sleep(0.04)
-
-        welcome = Text()
-        welcome.append("  Welcome to ", Style(color=t["muted"]))
-        welcome.append("libercode", Style(color=t["primary"], bold=True))
-        welcome.append(" — AI in your terminal\n", Style(color=t["muted"]))
-        welcome.append("  Model: ", Style(color=t["muted"]))
-        welcome.append(self.current_model, Style(color=t["accent"]))
-        welcome.append("  |  Theme: ", Style(color=t["muted"]))
-        welcome.append(self.theme_data_name, Style(color=t["secondary"]))
-        welcome.append("  |  ", Style(color=t["muted"]))
-        welcome.append(datetime.now().strftime("%H:%M %d/%m/%Y"), Style(color=t["muted"]))
-        welcome.append("\n")
-        log.write(welcome)
-        log.write(Text("  " + "─" * 60, Style(color=t["border"])))
-        log.write(Text(""))
-
-    def _write_logo(self) -> None:
-        log = self.query_one("#chat-log", RichLog)
-        t = self.theme_data
-        w = self.size.width
-        logo_text = Text(LOGO, style=Style(color=t["primary"], bold=True))
-        log.write(Align.center(logo_text, width=w))
-        welcome = Text()
-        welcome.append("  Welcome to ", Style(color=t["muted"]))
-        welcome.append("libercode", Style(color=t["primary"], bold=True))
-        welcome.append(" — AI in your terminal\n", Style(color=t["muted"]))
-        welcome.append("  Model: ", Style(color=t["muted"]))
-        welcome.append(self.current_model, Style(color=t["accent"]))
-        welcome.append("  |  Theme: ", Style(color=t["muted"]))
-        welcome.append(self.theme_data_name, Style(color=t["secondary"]))
-        welcome.append("  |  ", Style(color=t["muted"]))
-        welcome.append(datetime.now().strftime("%H:%M %d/%m/%Y"), Style(color=t["muted"]))
-        welcome.append("\n")
-        log.write(welcome)
-        log.write(Text("  " + "─" * 60, Style(color=t["border"])))
-        log.write(Text(""))
-
-    def _tick_spinner(self) -> None:
+        v = self.token_count
+        color = t["muted"] if v < 2000 else t["warning"] if v < 6000 else t["error"]
         try:
-            icon = self.query_one("#prompt-icon", Static)
-            frame = SPINNER_FRAMES[self.spinner_frame % len(SPINNER_FRAMES)]
-            icon.update(Text(frame, style=Style(color=self.theme_data["warning"])))
-            self.spinner_frame = self.spinner_frame + 1
+            self.query_one("#token-counter", Static).update(
+                Text(f"{v:,} tokens", style=Style(color=color))
+            )
+        except Exception:
+            pass
+
+    def watch_token_count(self, value: int) -> None:
+        self._refresh_token_color()
+
+    def watch_current_model(self, value: str) -> None:
+        try:
+            t = self.theme_data
+            self.query_one("#model-badge", Static).update(
+                Text(f" {value}", style=Style(color=t["muted"]))
+            )
         except Exception:
             pass
 
     def watch_is_thinking(self, value: bool) -> None:
         try:
-            inp = self.query_one("#prompt-input", Input)
-            inp.disabled = value
+            self.query_one("#prompt-input", Input).disabled = value
         except Exception:
             pass
         if value:
@@ -331,32 +377,25 @@ class LibercodeUI(App):
                 self._spinner_interval.cancel()
                 self._spinner_interval = None
             try:
-                icon = self.query_one("#prompt-icon", Static)
-                icon.update(Text("›", style=Style(color=self.theme_data["primary"])))
+                self.query_one("#prompt-icon", Static).update(
+                    Text("›", style=Style(color=self.theme_data["primary"]))
+                )
             except Exception:
                 pass
 
-    def watch_token_count(self, value: int) -> None:
+    def watch_spinner_frame(self, value: int) -> None:
+        if not self.is_thinking:
+            return
         try:
-            t = self.theme_data
-            counter = self.query_one("#token-counter", Static)
-            if value < 2000:
-                color = t["muted"]
-            elif value < 6000:
-                color = t["warning"]
-            else:
-                color = t["error"]
-            counter.update(Text(f" {value:,} tokens", style=Style(color=color)))
+            frame = SPINNER_FRAMES[value % len(SPINNER_FRAMES)]
+            self.query_one("#prompt-icon", Static).update(
+                Text(frame, style=Style(color=self.theme_data["warning"]))
+            )
         except Exception:
             pass
 
-    def watch_current_model(self, value: str) -> None:
-        try:
-            t = self.theme_data
-            badge = self.query_one("#model-badge", Static)
-            badge.update(Text(f" {value}", style=Style(color=t["muted"])))
-        except Exception:
-            pass
+    def _tick_spinner(self) -> None:
+        self.spinner_frame = self.spinner_frame + 1
 
     def show_thinking(self) -> None:
         log = self.query_one("#chat-log", RichLog)
