@@ -82,6 +82,21 @@ def _detect_lang(code: str) -> str:
 
 class LibercodeUI(App):
     CSS = """
+    $bg: #282a36;
+    $bg_panel: #1e1f29;
+    $bg_input: #21222c;
+    $border: #6272a4;
+    $border_act: #bd93f9;
+    $primary: #bd93f9;
+    $secondary: #ff79c6;
+    $accent: #50fa7b;
+    $text: #f8f8f2;
+    $muted: #6272a4;
+    $error: #ff5555;
+    $warning: #ffb86c;
+    $success: #50fa7b;
+    $info: #8be9fd;
+
     Screen { background: $bg; }
 
     #header-bar {
