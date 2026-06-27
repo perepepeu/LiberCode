@@ -10,7 +10,6 @@ from rich.markdown import Markdown
 from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
-from rich.text import Text
 import sys as _sys
 from prompt_toolkit import PromptSession as PTSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -31,12 +30,14 @@ from libercode.task import TaskTracker
 from libercode.scratch import ScratchNotes
 from libercode.stop_condition import StopConditionChecker
 from libercode.modes import get_system_prompt
+from libercode.ui import Renderer
 
 
 class LiberAgent:
     def __init__(self, config: LiberConfig):
         self.config = config
         self.console = Console()
+        self.ui = Renderer(self.console)
 
         data_dir = Path(config.data_dir)
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -405,92 +406,16 @@ class LiberAgent:
         return self.stop_checker.auto_check(task_id, self.mode)
 
     def _print_hero(self):
-        gradient_colors = ["bold cyan", "bold cyan", "bold green", "bold green", "bold green", "bold green"]
-        lines = [
-            "██╗     ██╗██████╗ ███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗",
-            "██║     ██║██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝",
-            "██║     ██║██████╔╝█████╗  ██████╔╝██║     ██║   ██║██║  ██║█████╗  ",
-            "██║     ██║██╔══██╗██╔══╝  ██╔══██╗██║     ██║   ██║██║  ██║██╔══╝  ",
-            "███████╗██║██████╔╝███████╗██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗",
-            "╚══════╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
-        ]
-        banner = Text()
-        for i, line in enumerate(lines):
-            if i > 0:
-                banner.append("\n")
-            banner.append(line, style=gradient_colors[min(i, len(gradient_colors) - 1)])
-        self.console.print(Panel(banner, border_style="dim cyan", padding=(0, 2)))
-        self.console.print()
+        self.ui.hero()
 
     def _print_context_bar(self):
-        mode_colors = {"build": "green", "plan": "yellow", "spec": "blue"}
-        color = mode_colors.get(self.mode, "white")
-        bar = Text()
-        bar.append(f" {self.mode.capitalize()} ", style=f"bold {color}")
-        bar.append("· ", style="dim")
-        bar.append(self.provider.name, style="dim white")
-        bar.append(" · ", style="dim")
-        bar.append(f"Session #{self.session_id}", style="dim")
-        bar.append(" · ", style="dim")
-        bar.append("Connected", style="green")
-        self.console.print(Panel(bar, border_style="dim", padding=(0, 1)))
+        self.ui.context_bar(self.mode, self.provider.name, self.session_id)
 
     def _print_quick_actions(self):
-        actions = Text()
-        actions.append("  /mode", style="bold cyan")
-        actions.append("   ", style="dim")
-        actions.append("@attach", style="bold cyan")
-        actions.append("   ", style="dim")
-        actions.append("$agent", style="bold cyan")
-        actions.append("   ", style="dim")
-        actions.append("/commands", style="bold cyan")
-        self.console.print(actions)
+        self.ui.quick_actions()
 
     def _print_help(self):
-        table = Table(box=box.SIMPLE, padding=(0, 1))
-        table.add_column("Command", style="cyan", no_wrap=True)
-        table.add_column("Description")
-        rows = [
-            ("!<command>", "Run a shell command (e.g. !ls, !python test.py)"),
-            ("file:read <path>", "Read a file"),
-            ("file:write <path> <content>", "Write to a file"),
-            ("file:edit <path> ||| <old> ||| <new>", "Edit a file (replace text)"),
-            ("git <command>", "Run a git command"),
-            ("task:create <title> ||| <desc>", "Create a task"),
-            ("task:update <id> <key=value,...>", "Update a task"),
-            ("checkpoint [summary]", "Save a checkpoint"),
-            ("scratch <content>", "Write a quick scratch note"),
-            ("memory <key> = <value>", "Store something in project memory"),
-            ("mode <build|plan|spec>", "Switch working mode"),
-            ("agent:spawn <task>", "Spawn a helper sub-agent"),
-        ]
-        for cmd, desc in rows:
-            table.add_row(cmd, desc)
-
-        slash_table = Table(box=box.SIMPLE, padding=(0, 1))
-        slash_table.add_column("Command", style="cyan", no_wrap=True)
-        slash_table.add_column("Description")
-        slash_rows = [
-            ("/help", "Show this help"),
-            ("/tasks", "Show task list"),
-            ("/memory", "Show project memory"),
-            ("/checkpoints", "List recent checkpoints"),
-            ("/scratch", "List scratch notes"),
-            ("/mode", "Show current mode"),
-            ("/status", "Git status + current session info"),
-            ("/exit", "End session and exit"),
-        ]
-        for cmd, desc in slash_rows:
-            slash_table.add_row(cmd, desc)
-
-        self.console.print("[bold]Tool commands:[/]")
-        self.console.print(table)
-        self.console.print()
-        self.console.print("[bold]Slash commands:[/]")
-        self.console.print(slash_table)
-        self.console.print(
-            "[dim]Tip: Press Tab to cycle modes (build -> plan -> spec -> build)[/]"
-        )
+        self.ui.help()
 
     def _handle_slash_command(self, cmd: str) -> bool:
         cmd = cmd.strip().lower()
