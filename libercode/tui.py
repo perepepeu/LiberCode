@@ -109,7 +109,8 @@ class LibercodeUI(App):
     #logo-text { color: $primary; text-style: bold; }
     #model-badge { color: $muted; margin-left: 2; }
     #theme-badge { color: $accent; margin-left: 1; }
-    #token-counter { dock: right; color: $muted; margin-right: 2; }
+    #header-spacer { width: 1fr; }
+    #token-counter { color: $muted; margin-right: 2; }
 
     #chat-area {
         height: 1fr; overflow-y: auto; padding: 2 3;
@@ -168,6 +169,7 @@ class LibercodeUI(App):
             )
             yield Static(f" {self._init_model}", id="model-badge")
             yield Static(f" {self._init_theme_name}", id="theme-badge")
+            yield Static("", id="header-spacer")
             yield Static("0 tokens", id="token-counter")
         with ScrollableContainer(id="chat-area"):
             yield RichLog(id="chat-log", markup=True, highlight=True)
@@ -182,9 +184,12 @@ class LibercodeUI(App):
         self.theme_data = THEMES[self._init_theme_name]
         self.current_model = self._init_model
         self._spinner_interval = None
+        self.call_later(self._on_mounted)
+
+    async def _on_mounted(self) -> None:
         self._apply_theme(self.theme_data_name)
         self._build_hint_bar()
-        self.call_later(self._write_logo_animated)
+        await self._write_logo_animated()
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
@@ -260,9 +265,11 @@ class LibercodeUI(App):
         log = self.query_one("#chat-log", RichLog)
         t = self.theme_data
         import asyncio
+        w = self.size.width
         for i, line in enumerate(LOGO.split("\n")):
             log.write(Align.center(
-                Text(line, style=Style(color=t["primary"], bold=True))
+                Text(line, style=Style(color=t["primary"], bold=True)),
+                width=w,
             ))
             await asyncio.sleep(0.04)
 
@@ -284,8 +291,9 @@ class LibercodeUI(App):
     def _write_logo(self) -> None:
         log = self.query_one("#chat-log", RichLog)
         t = self.theme_data
+        w = self.size.width
         logo_text = Text(LOGO, style=Style(color=t["primary"], bold=True))
-        log.write(Align.center(logo_text))
+        log.write(Align.center(logo_text, width=w))
         welcome = Text()
         welcome.append("  Welcome to ", Style(color=t["muted"]))
         welcome.append("libercode", Style(color=t["primary"], bold=True))
