@@ -135,7 +135,14 @@ class LiberAgent:
 
     def _build_messages(self, user_input: str, history: list) -> list:
         messages = []
-        for h in history[-20:]:
+        limit = 20
+        if len(history) > limit:
+            dropped = len(history) - limit
+            messages.append({
+                "role": "system",
+                "content": f"[Note: {dropped} earlier messages were truncated to fit context window.]"
+            })
+        for h in history[-limit:]:
             role = h.get("role", "user")
             content = h.get("content", "")
             if role in ("user", "assistant"):
