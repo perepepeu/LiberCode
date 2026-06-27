@@ -1,7 +1,12 @@
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class FileStore:
@@ -45,7 +50,7 @@ class FileStore:
             if item["key"] == key:
                 item["value"] = value
                 item["category"] = category
-                item["updated_at"] = str(Path().stat())
+                item["updated_at"] = _now()
                 self._write_json(self._paths["memory"], items)
                 return
         items.append(
@@ -53,8 +58,8 @@ class FileStore:
                 "key": key,
                 "value": value,
                 "category": category,
-                "created_at": str(Path().stat()),
-                "updated_at": str(Path().stat()),
+                "created_at": _now(),
+                "updated_at": _now(),
             }
         )
         self._write_json(self._paths["memory"], items)
@@ -109,8 +114,8 @@ class FileStore:
                 "priority": priority,
                 "progress": 0.0,
                 "checkpoint_id": None,
-                "created_at": str(Path().stat()),
-                "updated_at": str(Path().stat()),
+                "created_at": _now(),
+                "updated_at": _now(),
             }
         )
         self._write_json(self._paths["tasks"], items)
@@ -131,7 +136,7 @@ class FileStore:
                 for k, v in kwargs.items():
                     if k in allowed:
                         item[k] = v
-                item["updated_at"] = str(Path().stat())
+                item["updated_at"] = _now()
                 break
         self._write_json(self._paths["tasks"], items)
 
@@ -176,7 +181,7 @@ class FileStore:
                     "task_id": task_id,
                     "summary": summary,
                     "snapshot": snapshot,
-                    "created_at": str(Path().stat()),
+                    "created_at": _now(),
                 },
                 indent=2,
                 default=str,
@@ -207,8 +212,8 @@ class FileStore:
                 "title": title,
                 "content": content,
                 "tags": tags,
-                "created_at": str(Path().stat()),
-                "updated_at": str(Path().stat()),
+                "created_at": _now(),
+                "updated_at": _now(),
             }
         )
         self._write_json(self._paths["scratch"], items)
@@ -222,7 +227,7 @@ class FileStore:
                 for k, v in kwargs.items():
                     if k in allowed:
                         item[k] = v
-                item["updated_at"] = str(Path().stat())
+                item["updated_at"] = _now()
                 break
         self._write_json(self._paths["scratch"], items)
 
@@ -249,7 +254,7 @@ class FileStore:
                 "turn_count": 0,
                 "summary": "",
                 "is_active": True,
-                "started_at": str(Path().stat()),
+                "started_at": _now(),
                 "ended_at": None,
             }
         )
@@ -261,7 +266,7 @@ class FileStore:
         for item in items:
             if item["id"] == session_id:
                 item["is_active"] = False
-                item["ended_at"] = str(Path().stat())
+                item["ended_at"] = _now()
                 item["summary"] = summary
                 break
         self._write_json(self._paths["sessions"], items)
@@ -294,7 +299,7 @@ class FileStore:
                 "role": role,
                 "content": content,
                 "mode": mode,
-                "timestamp": str(Path().stat()),
+                "timestamp": _now(),
             }
         )
         with open(file_path, "a") as f:
