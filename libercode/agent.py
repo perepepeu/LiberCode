@@ -655,9 +655,8 @@ class LiberAgent:
             if tool_result:
                 self.console.print(Panel(tool_result, border_style="dim"))
 
+            history.append({"role": "user", "content": user_input})
             history.append({"role": "assistant", "content": full_response})
-            if user_input.strip():
-                history.append({"role": "user", "content": user_input})
 
             if self.turn_count >= self.config.max_turns:
                 self.console.print(
