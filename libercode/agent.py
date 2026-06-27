@@ -241,10 +241,7 @@ class LiberAgent:
                 new_mode = stripped[len("mode ") :].strip()
                 if new_mode in ("build", "plan", "spec"):
                     self.mode = new_mode
-                    self.store.session_end(self.session_id)
-                    self.session_id = self.store.session_start(
-                        str(Path.cwd().resolve()), new_mode
-                    )
+                    self.store.session_update_mode(self.session_id, new_mode)
                     return None
                 return f"[Mode] Invalid mode. Use build, plan, or spec."
 
@@ -304,10 +301,7 @@ class LiberAgent:
             new_mode = body.strip()
             if new_mode in ("build", "plan", "spec"):
                 self.mode = new_mode
-                self.store.session_end(self.session_id)
-                self.session_id = self.store.session_start(
-                    str(Path.cwd().resolve()), new_mode
-                )
+                self.store.session_update_mode(self.session_id, new_mode)
                 return None
             return f"[Mode] Invalid mode. Use build, plan, or spec."
         if name == "agent:spawn":
@@ -637,8 +631,7 @@ class LiberAgent:
         def _(event):
             new = mode_cycle[self.mode]
             self.mode = new
-            self.store.session_end(self.session_id)
-            self.session_id = self.store.session_start(str(Path.cwd().resolve()), new)
+            self.store.session_update_mode(self.session_id, new)
             event.app.current_buffer.text = ""
             event.app.invalidate()
 
@@ -647,8 +640,7 @@ class LiberAgent:
             rev = {"build": "spec", "plan": "build", "spec": "plan"}
             new = rev[self.mode]
             self.mode = new
-            self.store.session_end(self.session_id)
-            self.session_id = self.store.session_start(str(Path.cwd().resolve()), new)
+            self.store.session_update_mode(self.session_id, new)
             event.app.current_buffer.text = ""
             event.app.invalidate()
 

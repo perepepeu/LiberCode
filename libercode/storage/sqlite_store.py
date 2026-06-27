@@ -298,6 +298,13 @@ class SqliteStore:
                 (summary, session_id),
             )
 
+    def session_update_mode(self, session_id: int, mode: str):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sessions SET mode = ? WHERE id = ?",
+                (mode, session_id),
+            )
+
     def session_get(self, session_id: int) -> Optional[dict]:
         with self._conn() as conn:
             row = conn.execute(
