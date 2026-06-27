@@ -12,9 +12,10 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.reactive import reactive
-from textual.widgets import Input, RichLog, Static
 from textual.message import Message
+from textual.reactive import reactive
+from textual.widgets import Button, Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 THEMES = {
     "dracula": {
@@ -112,6 +113,23 @@ class CommandEvent(Message):
         super().__init__()
 
 
+class ShowPickerEvent(Message):
+    """Posted by agent to ask UI to show a selection picker."""
+    def __init__(self, kind: str, items: list, current: str = "") -> None:
+        self.kind = kind
+        self.items = items
+        self.current = current
+        super().__init__()
+
+
+class PickerSelectedEvent(Message):
+    """Posted by UI when user picks an item from the picker."""
+    def __init__(self, kind: str, value: str) -> None:
+        self.kind = kind
+        self.value = value
+        super().__init__()
+
+
 class LibercodeUI(App):
     CSS = """
     $bg:         #282a36;
@@ -127,7 +145,7 @@ class LibercodeUI(App):
 
     Screen {
         background: $bg;
-        layers: base;
+        layers: base overlay;
     }
 
     /* ── HEADER ── */
@@ -138,24 +156,10 @@ class LibercodeUI(App):
         padding: 0 2;
         align-vertical: middle;
     }
-    #logo-text {
-        color: $primary;
-        text-style: bold;
-        width: auto;
-    }
-    #model-badge {
-        color: $muted;
-        width: auto;
-        margin-left: 2;
-    }
-    #theme-badge {
-        color: $accent;
-        width: auto;
-        margin-left: 1;
-    }
-    #spacer {
-        width: 1fr;
-    }
+    #logo-text   { color: $primary; text-style: bold; width: auto; }
+    #model-badge { color: $muted;   width: auto; margin-left: 2; }
+    #theme-badge { color: $accent;  width: auto; margin-left: 1; }
+    #spacer      { width: 1fr; }
     #token-counter {
         color: $muted;
         width: auto;
@@ -163,7 +167,7 @@ class LibercodeUI(App):
         text-align: right;
     }
 
-    /* ── LOGO AREA ── */
+    /* ── LOGO ── */
     #logo-area {
         height: auto;
         background: $bg;
@@ -173,7 +177,7 @@ class LibercodeUI(App):
         text-style: bold;
     }
 
-    /* ── CHAT AREA ── */
+    /* ── CHAT ── */
     #chat-area {
         height: 1fr;
         background: $bg;
@@ -189,7 +193,7 @@ class LibercodeUI(App):
         padding: 1 0;
     }
 
-    /* ── INPUT AREA ── */
+    /* ── INPUT ── */
     #input-area {
         height: auto;
         min-height: 5;
@@ -198,15 +202,8 @@ class LibercodeUI(App):
         border-top: tall $border;
         padding: 1 2;
     }
-    #prompt-row {
-        height: auto;
-        align-vertical: middle;
-    }
-    #prompt-icon {
-        color: $primary;
-        width: 3;
-        margin-right: 1;
-    }
+    #prompt-row   { height: auto; align-vertical: middle; }
+    #prompt-icon  { color: $primary; width: 3; margin-right: 1; }
     #prompt-input {
         height: auto;
         min-height: 1;
@@ -216,15 +213,27 @@ class LibercodeUI(App):
         border: round $border;
         padding: 0 1;
     }
-    #prompt-input:focus {
-        border: round $border_act;
-    }
+    #prompt-input:focus { border: round $border_act; }
+
+    /* ── HINT BAR ── */
     #hint-bar {
         height: 1;
-        color: $muted;
         margin-top: 1;
-        padding-left: 4;
+        background: $bg_panel;
+        padding-left: 2;
     }
+    .hint-btn {
+        background: $bg_panel;
+        color: $muted;
+        border: none;
+        height: 1;
+        min-width: 0;
+        width: auto;
+        padding: 0 1;
+        margin: 0 1 0 0;
+    }
+    .hint-btn:hover  { background: $bg_input; color: $accent; }
+    .hint-btn:focus  { background: $bg_panel; border: none; }
 
     /* ── COMMAND PALETTE ── */
     #command-palette {
@@ -233,16 +242,30 @@ class LibercodeUI(App):
         dock: bottom;
         margin-bottom: 8;
         margin-left: 4;
-        width: 56;
+        width: 62;
         height: auto;
         max-height: 22;
         background: $bg_panel;
         border: round $border_act;
-        padding: 1 0;
+    }
+
+    /* ── MODEL / MODE PICKER ── */
+    #picker {
+        display: none;
+        layer: overlay;
+        dock: bottom;
+        margin-bottom: 8;
+        margin-left: 68;
+        width: 36;
+        height: auto;
+        max-height: 14;
+        background: $bg_panel;
+        border: round $primary;
     }
     """
 
     CTRL_C_QUIT = False
+
     BINDINGS = [
         Binding("ctrl+c", "quit",          "quit",    priority=True, show=False),
         Binding("ctrl+t", "cycle_theme",   "theme",   priority=True, show=False),
@@ -269,6 +292,7 @@ class LibercodeUI(App):
         self._palette_visible = False
         self._palette_index = 0
         self._palette_items = []
+        self._picker_kind = ""
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -285,8 +309,14 @@ class LibercodeUI(App):
             with Horizontal(id="prompt-row"):
                 yield Static("›", id="prompt-icon")
                 yield Input(placeholder="Type a message...", id="prompt-input")
-            yield Static("", id="hint-bar")
-        yield Static("", id="command-palette")
+            with Horizontal(id="hint-bar"):
+                yield Button("^C quit",    id="hint-quit",    classes="hint-btn")
+                yield Button("^T theme",   id="hint-theme",   classes="hint-btn")
+                yield Button("^N session", id="hint-session", classes="hint-btn")
+                yield Button("^L clear",   id="hint-clear",   classes="hint-btn")
+                yield Button("Esc cancel", id="hint-cancel",  classes="hint-btn")
+        yield OptionList(id="command-palette")
+        yield OptionList(id="picker")
 
     def on_mount(self) -> None:
         self.current_model = self._init_model
@@ -342,20 +372,23 @@ class LibercodeUI(App):
 
         self.query_one("#prompt-icon").styles.color = t["primary"]
 
+        self.query_one("#hint-bar").styles.background = t["bg_panel"]
+
         self._build_hint_bar()
 
-        if self._palette_visible:
-            try:
-                self.query_one("#command-palette", Static).update(
-                    self._render_palette()
-                )
-            except Exception:
-                pass
-
         try:
-            p = self.query_one("#command-palette", Static)
+            p = self.query_one("#command-palette", OptionList)
             p.styles.background = t["bg_panel"]
             p.styles.border = ("round", t["border_act"])
+            if self._palette_visible:
+                self._refresh_palette()
+        except Exception:
+            pass
+
+        try:
+            p = self.query_one("#picker", OptionList)
+            p.styles.background = t["bg_panel"]
+            p.styles.border = ("round", t["primary"])
         except Exception:
             pass
 
@@ -393,17 +426,24 @@ class LibercodeUI(App):
 
     def _build_hint_bar(self) -> None:
         t = self.theme_data
-        hint = Text()
-        for key, label in [
-            ("^C", "quit"), ("^T", "theme"), ("^N", "session"),
-            ("^L", "clear"), ("Esc", "cancel"),
-        ]:
-            hint.append(f" {key}", Style(color=t["accent"], bold=True))
-            hint.append(f" {label}  ", Style(color=t["muted"]))
-        try:
-            self.query_one("#hint-bar", Static).update(hint)
-        except Exception:
-            pass
+        mapping = {
+            "hint-quit":    ("^C", "quit"),
+            "hint-theme":   ("^T", "theme"),
+            "hint-session": ("^N", "session"),
+            "hint-clear":   ("^L", "clear"),
+            "hint-cancel":  ("Esc", "cancel"),
+        }
+        for btn_id, (key, label) in mapping.items():
+            try:
+                btn = self.query_one(f"#{btn_id}", Button)
+                rich_label = Text()
+                rich_label.append(key,       Style(color=t["accent"], bold=True))
+                rich_label.append(f" {label}", Style(color=t["muted"]))
+                btn.label              = rich_label
+                btn.styles.background  = t["bg_panel"]
+                btn.styles.color       = t["muted"]
+            except Exception:
+                pass
 
     def _refresh_token_color(self) -> None:
         t = self.theme_data
@@ -415,6 +455,221 @@ class LibercodeUI(App):
             )
         except Exception:
             pass
+
+    def _show_command_palette(self, query: str) -> None:
+        q = query.lower().strip()
+        self._palette_items = [
+            (cmd, desc, color)
+            for cmd, desc, color in COMMANDS
+            if (not q) or q in cmd or q in desc.lower()
+        ]
+
+        if not self._palette_items:
+            self._hide_command_palette()
+            return
+
+        self._palette_index = 0
+        self._palette_visible = True
+
+        palette = self.query_one("#command-palette", OptionList)
+        self._fill_palette_options(palette)
+        palette.display = True
+        palette.focus()
+
+    def _fill_palette_options(self, palette: OptionList) -> None:
+        t = self.theme_data
+        palette.clear_options()
+        for cmd, desc, color_key in self._palette_items:
+            color = t.get(color_key, t["primary"])
+            label = Text()
+            label.append(cmd.ljust(14), Style(color=color, bold=True))
+            label.append(desc,          Style(color=t["muted"]))
+            palette.add_option(Option(label, id=cmd.lstrip("/")))
+        palette.highlighted = self._palette_index
+
+    def _refresh_palette(self) -> None:
+        try:
+            palette = self.query_one("#command-palette", OptionList)
+            self._fill_palette_options(palette)
+        except Exception:
+            pass
+
+    def _hide_command_palette(self) -> None:
+        self._palette_visible = False
+        self._palette_index   = 0
+        self._palette_items   = []
+        try:
+            p = self.query_one("#command-palette", OptionList)
+            p.display = False
+            p.clear_options()
+        except Exception:
+            pass
+        try:
+            self.query_one("#prompt-input", Input).focus()
+        except Exception:
+            pass
+
+    def _palette_select_next(self) -> None:
+        if not self._palette_items:
+            return
+        try:
+            palette = self.query_one("#command-palette", OptionList)
+            n = len(self._palette_items)
+            cur = palette.highlighted or 0
+            palette.highlighted = (cur + 1) % n
+            self._palette_index = palette.highlighted
+        except Exception:
+            pass
+
+    def _palette_select_prev(self) -> None:
+        if not self._palette_items:
+            return
+        try:
+            palette = self.query_one("#command-palette", OptionList)
+            n = len(self._palette_items)
+            cur = palette.highlighted or 0
+            palette.highlighted = (cur - 1) % n
+            self._palette_index = palette.highlighted
+        except Exception:
+            pass
+
+    def _palette_confirm(self) -> None:
+        if not self._palette_items:
+            return
+        try:
+            palette = self.query_one("#command-palette", OptionList)
+            idx = palette.highlighted or 0
+            cmd, _, _ = self._palette_items[idx]
+        except Exception:
+            return
+        self._hide_command_palette()
+        try:
+            self.query_one("#prompt-input", Input).value = ""
+        except Exception:
+            pass
+        self._dispatch_command(cmd.lstrip("/"))
+
+    def show_picker(self, kind: str, items: list, current: str = "") -> None:
+        self._picker_kind = kind
+        t = self.theme_data
+        picker = self.query_one("#picker", OptionList)
+        picker.clear_options()
+        for item in items:
+            is_cur = (item == current)
+            label  = Text()
+            label.append(
+                ("✓ " if is_cur else "  ") + item,
+                Style(
+                    color=t["accent"] if is_cur else t["text"],
+                    bold=is_cur,
+                )
+            )
+            picker.add_option(Option(label, id=item))
+        picker.highlighted = 0
+        picker.display     = True
+        picker.focus()
+
+    def _hide_picker(self) -> None:
+        try:
+            self.query_one("#picker", OptionList).display = False
+            self.query_one("#picker", OptionList).clear_options()
+        except Exception:
+            pass
+        try:
+            self.query_one("#prompt-input", Input).focus()
+        except Exception:
+            pass
+
+    def _dispatch_command(self, cmd: str) -> None:
+        if cmd == "quit":
+            self.action_quit()
+        elif cmd == "theme":
+            self.action_cycle_theme()
+        elif cmd == "session":
+            self.action_new_session()
+        elif cmd == "clear":
+            self.action_clear_chat()
+        elif cmd == "help":
+            self._show_help()
+        else:
+            self.post_message(CommandEvent(command=cmd))
+
+    def _show_help(self) -> None:
+        log = self.query_one("#chat-log", RichLog)
+        t = self.theme_data
+        log.write(Text(""))
+        log.write(Text("  Available commands\n", Style(color=t["primary"], bold=True)))
+        log.write(Text("  " + "─" * 50, Style(color=t["border"])))
+        for cmd, desc, color_key in COMMANDS:
+            color = t[color_key] if color_key in t else t["muted"]
+            line = Text()
+            line.append(f"  {cmd:<14}", Style(color=color, bold=True))
+            line.append(desc, Style(color=t["muted"]))
+            log.write(line)
+        log.write(Text("  " + "─" * 50 + "\n", Style(color=t["border"])))
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        val = event.value
+        if val.startswith("/"):
+            query = val[1:]
+            self._palette_index = 0
+            self._show_command_palette(query)
+        else:
+            if self._palette_visible:
+                self._hide_command_palette()
+
+    def on_key(self, event) -> None:
+        try:
+            picker = self.query_one("#picker", OptionList)
+            if picker.display and event.key == "escape":
+                self._hide_picker()
+                event.stop()
+                return
+        except Exception:
+            pass
+
+        if not self._palette_visible:
+            return
+        if event.key == "enter":
+            self._palette_confirm()
+            event.stop()
+        elif event.key == "escape":
+            self._hide_command_palette()
+            event.stop()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        actions = {
+            "hint-quit":    self.action_quit,
+            "hint-theme":   self.action_cycle_theme,
+            "hint-session": self.action_new_session,
+            "hint-clear":   self.action_clear_chat,
+            "hint-cancel":  self.action_cancel_action,
+        }
+        fn = actions.get(event.button.id)
+        if fn:
+            fn()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        event.stop()
+
+        if event.option_list.id == "command-palette":
+            cmd = event.option.id
+            self._hide_command_palette()
+            try:
+                self.query_one("#prompt-input", Input).value = ""
+            except Exception:
+                pass
+            self._dispatch_command(cmd)
+
+        elif event.option_list.id == "picker":
+            value = event.option.id
+            self._hide_picker()
+            self.post_message(PickerSelectedEvent(kind=self._picker_kind, value=value))
+
+    def on_show_picker_event(self, event: ShowPickerEvent) -> None:
+        self.show_picker(event.kind, event.items, event.current)
 
     def watch_token_count(self, value: int) -> None:
         self._refresh_token_color()
@@ -572,120 +827,11 @@ class LibercodeUI(App):
         self._apply_theme(next_name)
         self.show_theme_changed(next_name)
 
-    def _show_command_palette(self, query: str) -> None:
-        q = query.lower().strip()
-        if q:
-            self._palette_items = [
-                (cmd, desc, color)
-                for cmd, desc, color in COMMANDS
-                if q in cmd or q in desc.lower()
-            ]
-        else:
-            self._palette_items = list(COMMANDS)
-
-        if not self._palette_items:
-            self._hide_command_palette()
-            return
-
-        self._palette_index = max(
-            0, min(self._palette_index, len(self._palette_items) - 1)
-        )
-        self._palette_visible = True
-        palette = self.query_one("#command-palette", Static)
-        palette.display = True
-        palette.update(self._render_palette())
-
-    def _hide_command_palette(self) -> None:
-        self._palette_visible = False
-        self._palette_index = 0
-        self._palette_items = []
-        try:
-            self.query_one("#command-palette", Static).display = False
-        except Exception:
-            pass
-
-    def _render_palette(self) -> Text:
-        t = self.theme_data
-        out = Text()
-
-        out.append("  Commands\n", Style(color=t["muted"], italic=True))
-        out.append("  " + "─" * 50 + "\n", Style(color=t["border"]))
-
-        for i, (cmd, desc, color_key) in enumerate(self._palette_items):
-            selected = (i == self._palette_index)
-            bg = t["bg_input"] if selected else t["bg_panel"]
-
-            indicator = "›" if selected else " "
-            out.append(
-                f" {indicator} ",
-                Style(color=t["accent"], bold=True, bgcolor=bg)
-            )
-            out.append(
-                cmd.ljust(12),
-                Style(color=t[color_key] if color_key in t else t["primary"],
-                      bold=selected, bgcolor=bg)
-            )
-            out.append("  ", Style(bgcolor=bg))
-            out.append(
-                desc + "\n",
-                Style(color=t["muted"], bgcolor=bg)
-            )
-
-        out.append("  " + "─" * 50 + "\n", Style(color=t["border"]))
-        out.append(
-            "  ↑↓ navigate   Enter confirm   Esc close\n",
-            Style(color=t["muted"], italic=True)
-        )
-        return out
-
-    def _palette_select_next(self) -> None:
-        if not self._palette_items:
-            return
-        self._palette_index = (self._palette_index + 1) % len(self._palette_items)
-        self.query_one("#command-palette", Static).update(self._render_palette())
-
-    def _palette_select_prev(self) -> None:
-        if not self._palette_items:
-            return
-        self._palette_index = (self._palette_index - 1) % len(self._palette_items)
-        self.query_one("#command-palette", Static).update(self._render_palette())
-
-    def _palette_confirm(self) -> None:
-        if not self._palette_items:
-            return
-        cmd, _, _ = self._palette_items[self._palette_index]
-        self._hide_command_palette()
-        inp = self.query_one("#prompt-input", Input)
-        inp.value = ""
-        self._dispatch_command(cmd.lstrip("/"))
-
-    def _dispatch_command(self, cmd: str) -> None:
-        if cmd == "quit":
-            self.action_quit()
-        elif cmd == "theme":
-            self.action_cycle_theme()
-        elif cmd == "session":
-            self.action_new_session()
-        elif cmd == "clear":
-            self.action_clear_chat()
-        elif cmd == "help":
-            self._show_help()
-        else:
-            self.post_message(CommandEvent(command=cmd))
-
-    def _show_help(self) -> None:
-        log = self.query_one("#chat-log", RichLog)
-        t = self.theme_data
-        log.write(Text(""))
-        log.write(Text("  Available commands\n", Style(color=t["primary"], bold=True)))
-        log.write(Text("  " + "─" * 50, Style(color=t["border"])))
-        for cmd, desc, color_key in COMMANDS:
-            color = t[color_key] if color_key in t else t["muted"]
-            line = Text()
-            line.append(f"  {cmd:<14}", Style(color=color, bold=True))
-            line.append(desc, Style(color=t["muted"]))
-            log.write(line)
-        log.write(Text("  " + "─" * 50 + "\n", Style(color=t["border"])))
+    def action_quit(self)          -> None: self.exit()
+    def action_cycle_theme(self)   -> None: self.cycle_theme()
+    def action_new_session(self)   -> None: self.show_session_cleared()
+    def action_clear_chat(self)    -> None: self.query_one("#chat-log", RichLog).clear()
+    def action_cancel_action(self) -> None: self.show_cancelled()
 
     def action_palette_up(self) -> None:
         if self._palette_visible:
@@ -694,41 +840,6 @@ class LibercodeUI(App):
     def action_palette_down(self) -> None:
         if self._palette_visible:
             self._palette_select_next()
-
-    def action_quit(self) -> None:
-        self.exit()
-
-    def action_cycle_theme(self) -> None:
-        self.cycle_theme()
-
-    def action_new_session(self) -> None:
-        self.show_session_cleared()
-
-    def action_clear_chat(self) -> None:
-        self.query_one("#chat-log", RichLog).clear()
-
-    def action_cancel_action(self) -> None:
-        self.show_cancelled()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        val = event.value
-        if val.startswith("/"):
-            query = val[1:]
-            self._palette_index = 0
-            self._show_command_palette(query)
-        else:
-            if self._palette_visible:
-                self._hide_command_palette()
-
-    def on_key(self, event) -> None:
-        if not self._palette_visible:
-            return
-        if event.key == "enter":
-            self._palette_confirm()
-            event.stop()
-        elif event.key == "escape":
-            self._hide_command_palette()
-            event.stop()
 
 
 if __name__ == "__main__":
