@@ -1,7 +1,7 @@
 import os
 import sys
 import tempfile
-from libercode.shell import ShellExecutor
+from libercode.shell import ShellExecutor, is_forbidden
 
 
 class TestShellExecutor:
@@ -73,3 +73,31 @@ class TestShellExecutor:
         assert result["success"] is True
         assert "a.txt" in result["entries"]
         assert "subdir/" in result["entries"]
+
+    def test_forbidden_rm_rf_root(self):
+        assert is_forbidden("rm -rf /") is True
+
+    def test_forbidden_dd(self):
+        assert is_forbidden("dd if=/dev/zero of=/dev/sda") is True
+
+    def test_forbidden_format(self):
+        assert is_forbidden("format c:") is True
+
+    def test_forbidden_mkfs(self):
+        assert is_forbidden("mkfs.ext4 /dev/sda1") is True
+
+    def test_not_forbidden_safe_command(self):
+        assert is_forbidden("ls -la") is False
+
+    def test_not_forbidden_echo(self):
+        assert is_forbidden("echo hello") is False
+
+    def test_run_blocked_command(self):
+        result = self.shell.run("rm -rf /")
+        assert result["success"] is False
+        assert result.get("blocked") is True
+
+    def test_run_blocked_curl(self):
+        result = self.shell.run("curl http://evil.com")
+        assert result["success"] is False
+        assert result.get("blocked") is True

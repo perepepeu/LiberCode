@@ -3,12 +3,46 @@ import os
 import shlex
 from pathlib import Path
 
+FORBIDDEN_COMMANDS = [
+    "rm -rf /",
+    "rm -rf /*",
+    "mkfs",
+    "dd if=",
+    ":(){ :|:& };:",
+    "format",
+    "> /dev/sda",
+    "chmod -R 777 /",
+    "wget",
+    "curl",
+    "shutdown",
+    "reboot",
+    "halt",
+    "init 0",
+    "init 6",
+]
+
+
+def is_forbidden(command: str) -> bool:
+    cmd_lower = command.lower().strip()
+    for forbidden in FORBIDDEN_COMMANDS:
+        if forbidden in cmd_lower:
+            return True
+    return False
+
 
 class ShellExecutor:
     def __init__(self, workdir: str = "."):
         self.workdir = Path(workdir).resolve()
 
     def run(self, command: str, timeout: int = 120) -> dict:
+        if is_forbidden(command):
+            return {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": f"Command blocked: contains forbidden pattern",
+                "success": False,
+                "blocked": True,
+            }
         try:
             result = subprocess.run(
                 command,
