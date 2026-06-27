@@ -12,15 +12,24 @@ class SqliteStore:
         os.makedirs(os.path.dirname(db_path), exist_ok=True) if os.path.dirname(
             db_path
         ) else None
+        self._conn = None
         self._init_db()
 
-    def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _get_conn(self):
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, timeout=30)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
+
+    def close(self):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     def _init_db(self):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS memory (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +88,7 @@ class SqliteStore:
             """)
 
     def memory_set(self, key: str, value: str, category: str = "general"):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 """
                 INSERT INTO memory (key, value, category, updated_at)
@@ -93,14 +102,14 @@ class SqliteStore:
             )
 
     def memory_get(self, key: str) -> Optional[str]:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT value FROM memory WHERE key = ?", (key,)
             ).fetchone()
             return row["value"] if row else None
 
     def memory_search(self, query: str, category: Optional[str] = None) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             if category:
                 rows = conn.execute(
                     "SELECT key, value, category FROM memory WHERE (key LIKE ? OR value LIKE ?) AND category = ?",
@@ -114,11 +123,11 @@ class SqliteStore:
             return [dict(r) for r in rows]
 
     def memory_delete(self, key: str):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute("DELETE FROM memory WHERE key = ?", (key,))
 
     def memory_all(self, category: Optional[str] = None) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             if category:
                 rows = conn.execute(
                     "SELECT key, value, category FROM memory WHERE category = ?",
@@ -138,7 +147,7 @@ class SqliteStore:
         mode: str = "build",
         priority: str = "medium",
     ) -> int:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO tasks (title, description, parent_id, mode, priority) VALUES (?, ?, ?, ?, ?)",
                 (title, description, parent_id, mode, priority),
@@ -161,13 +170,13 @@ class SqliteStore:
         set_clause = ", ".join(f"{k} = ?" for k in fields if k != "updated_at")
         set_clause += ", updated_at = datetime('now')"
         values = [v for k, v in fields.items() if k != "updated_at"]
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 f"UPDATE tasks SET {set_clause} WHERE id = ?", (*values, task_id)
             )
 
     def task_get(self, task_id: int) -> Optional[dict]:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
@@ -176,7 +185,7 @@ class SqliteStore:
     def task_list(
         self, status: Optional[str] = None, mode: Optional[str] = None
     ) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             query = "SELECT * FROM tasks WHERE 1=1"
             params = []
             if status:
@@ -190,7 +199,7 @@ class SqliteStore:
             return [dict(r) for r in rows]
 
     def task_tree(self, parent_id: Optional[int] = None, indent: int = 0) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             if parent_id is None:
                 rows = conn.execute(
                     "SELECT * FROM tasks WHERE parent_id IS NULL ORDER BY created_at"
@@ -212,14 +221,14 @@ class SqliteStore:
     def checkpoint_save(
         self, checkpoint_id: str, task_id: Optional[int], summary: str, snapshot: dict
     ):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 "INSERT INTO checkpoints (id, task_id, summary, snapshot) VALUES (?, ?, ?, ?)",
                 (checkpoint_id, task_id, summary, json.dumps(snapshot)),
             )
 
     def checkpoint_get(self, checkpoint_id: str) -> Optional[dict]:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)
             ).fetchone()
@@ -230,7 +239,7 @@ class SqliteStore:
             return None
 
     def checkpoint_list(self, task_id: Optional[int] = None) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             if task_id:
                 rows = conn.execute(
                     "SELECT * FROM checkpoints WHERE task_id = ? ORDER BY created_at DESC",
@@ -243,7 +252,7 @@ class SqliteStore:
             return [dict(r) for r in rows]
 
     def scratch_create(self, title: str, content: str = "", tags: str = "") -> int:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO scratch_notes (title, content, tags) VALUES (?, ?, ?)",
                 (title, content, tags),
@@ -257,21 +266,21 @@ class SqliteStore:
             return
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         set_clause += ", updated_at = datetime('now')"
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 f"UPDATE scratch_notes SET {set_clause} WHERE id = ?",
                 (*fields.values(), note_id),
             )
 
     def scratch_get(self, note_id: int) -> Optional[dict]:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM scratch_notes WHERE id = ?", (note_id,)
             ).fetchone()
             return dict(row) if row else None
 
     def scratch_list(self, tag: Optional[str] = None) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             if tag:
                 rows = conn.execute(
                     "SELECT * FROM scratch_notes WHERE tags LIKE ? ORDER BY updated_at DESC",
@@ -284,7 +293,7 @@ class SqliteStore:
             return [dict(r) for r in rows]
 
     def session_start(self, project_root: str, mode: str = "build") -> int:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO sessions (project_root, mode) VALUES (?, ?)",
                 (project_root, mode),
@@ -292,28 +301,28 @@ class SqliteStore:
             return cur.lastrowid
 
     def session_end(self, session_id: int, summary: str = ""):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 "UPDATE sessions SET is_active = 0, ended_at = datetime('now'), summary = ? WHERE id = ?",
                 (summary, session_id),
             )
 
     def session_update_mode(self, session_id: int, mode: str):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 "UPDATE sessions SET mode = ? WHERE id = ?",
                 (mode, session_id),
             )
 
     def session_get(self, session_id: int) -> Optional[dict]:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM sessions WHERE id = ?", (session_id,)
             ).fetchone()
             return dict(row) if row else None
 
     def session_get_active(self, project_root: str) -> Optional[dict]:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM sessions WHERE project_root = ? AND is_active = 1 ORDER BY started_at DESC LIMIT 1",
                 (project_root,),
@@ -321,7 +330,7 @@ class SqliteStore:
             return dict(row) if row else None
 
     def session_list(self, project_root: Optional[str] = None) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             if project_root:
                 rows = conn.execute(
                     "SELECT * FROM sessions WHERE project_root = ? ORDER BY started_at DESC LIMIT 20",
@@ -336,14 +345,14 @@ class SqliteStore:
     def history_append(
         self, session_id: int, role: str, content: str, mode: Optional[str] = None
     ):
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             conn.execute(
                 "INSERT INTO conversation_history (session_id, role, content, mode) VALUES (?, ?, ?, ?)",
                 (session_id, role, content, mode),
             )
 
     def history_get(self, session_id: int, limit: int = 50) -> list:
-        with self._conn() as conn:
+        with self._get_conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM conversation_history WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?",
                 (session_id, limit),
