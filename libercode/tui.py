@@ -8,6 +8,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.reactive import reactive
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Static, Input, RichLog
@@ -134,6 +135,15 @@ class LibercodeUI(App):
     #prompt-input:focus { border: solid $border_act; }
     #hint-bar { height: 1; color: $muted; margin-top: 1; }
     """
+
+    CTRL_C_QUIT = False
+    BINDINGS = [
+        Binding("ctrl+c", "quit", "quit", priority=True),
+        Binding("ctrl+t", "cycle_theme", "theme", priority=True),
+        Binding("ctrl+n", "new_session", "session", priority=True),
+        Binding("ctrl+l", "clear_chat", "clear", priority=True),
+        Binding("escape", "cancel_action", "cancel", priority=True),
+    ]
 
     THEME_NAMES = list(THEMES.keys())
 
@@ -451,6 +461,21 @@ class LibercodeUI(App):
         next_name = self.THEME_NAMES[(idx + 1) % len(self.THEME_NAMES)]
         self._apply_theme(next_name)
         self.show_theme_changed(next_name)
+
+    def action_quit(self) -> None:
+        self.exit()
+
+    def action_cycle_theme(self) -> None:
+        self.cycle_theme()
+
+    def action_new_session(self) -> None:
+        self.show_session_cleared()
+
+    def action_clear_chat(self) -> None:
+        self.query_one("#chat-log", RichLog).clear()
+
+    def action_cancel_action(self) -> None:
+        self.show_cancelled()
 
 
 if __name__ == "__main__":
