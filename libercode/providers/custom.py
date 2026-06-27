@@ -1,4 +1,5 @@
 import json
+import sys
 import time
 import requests
 from typing import Optional, Generator
@@ -6,6 +7,10 @@ from libercode.providers.base import BaseProvider
 
 MAX_RETRIES = 3
 BACKOFF_BASE = 2
+
+
+def _log_retry(attempt: int, wait: int):
+    print(f"\r  [Retry {attempt + 1}/{MAX_RETRIES}] Waiting {wait}s...", end="", flush=True)
 
 
 class CustomProvider(BaseProvider):
@@ -48,21 +53,27 @@ class CustomProvider(BaseProvider):
                 )
                 if resp.status_code == 429:
                     wait = BACKOFF_BASE ** attempt
+                    _log_retry(attempt, wait)
                     time.sleep(wait)
                     continue
                 if resp.status_code >= 500:
                     wait = BACKOFF_BASE ** attempt
+                    _log_retry(attempt, wait)
                     time.sleep(wait)
                     continue
                 return resp
             except requests.ConnectionError:
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(BACKOFF_BASE ** attempt)
+                    wait = BACKOFF_BASE ** attempt
+                    _log_retry(attempt, wait)
+                    time.sleep(wait)
                     continue
                 raise
             except requests.Timeout:
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(BACKOFF_BASE ** attempt)
+                    wait = BACKOFF_BASE ** attempt
+                    _log_retry(attempt, wait)
+                    time.sleep(wait)
                     continue
                 raise
         return None
