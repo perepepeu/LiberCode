@@ -14,6 +14,7 @@ SYSTEM_PROMPTS = {
     "build": _load_prompt("build"),
     "plan": _load_prompt("plan"),
     "spec": _load_prompt("spec"),
+    "debug": _load_prompt("debug"),
 }
 
 
