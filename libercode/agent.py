@@ -325,6 +325,10 @@ class LiberAgent:
     def _read_file(self, path: str) -> str:
         result = self.shell.read_file(path)
         if result["success"]:
+            real_path = Path(result.get("path", "")).resolve()
+            workdir = Path(self.shell.workdir).resolve()
+            if not str(real_path).startswith(str(workdir)):
+                return f"[Error] Path traversal blocked: {path}"
             content = result["content"]
             if len(content) > 4000:
                 content = content[:2000] + "\n... [truncated] ...\n" + content[-2000:]
@@ -334,6 +338,9 @@ class LiberAgent:
     def _write_file(self, path: str, content: str) -> str:
         if self.mode == "plan":
             return "[Error] Cannot write files in plan mode."
+        target = Path(self.shell.workdir) / path
+        if not target.resolve().is_relative_to(Path(self.shell.workdir).resolve()):
+            return f"[Error] Path traversal blocked: {path}"
         result = self.shell.write_file(path, content)
         if result["success"]:
             self.memory.auto_store_context(

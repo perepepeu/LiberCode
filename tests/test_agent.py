@@ -1,5 +1,6 @@
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock
 from libercode.agent import LiberAgent
 from libercode.config import LiberConfig
@@ -72,6 +73,27 @@ class TestToolCallParser:
         agent = make_agent(tempfile.mkdtemp())
         result = agent._process_tool_call("just some text with no tool")
         assert result is None
+
+    def test_path_traversal_read_blocked(self):
+        agent = make_agent(tempfile.mkdtemp())
+        result = agent._read_file("../../../etc/passwd")
+        assert "traversal blocked" in result.lower()
+
+    def test_path_traversal_write_blocked(self):
+        agent = make_agent(tempfile.mkdtemp())
+        result = agent._write_file("../../../tmp/evil.txt", "payload")
+        assert "traversal blocked" in result.lower()
+
+    def test_path_traversal_read_safe(self):
+        agent = make_agent(tempfile.mkdtemp())
+        agent.shell.read_file.return_value = {
+            "success": True,
+            "content": "safe",
+            "path": str(Path(tempfile.mkdtemp()) / "safe.txt"),
+        }
+        agent.shell.workdir = Path(tempfile.mkdtemp())
+        result = agent._read_file("safe.txt")
+        assert "safe" in result
 
     def test_extract_xml_tool_call(self):
         agent = make_agent(tempfile.mkdtemp())
