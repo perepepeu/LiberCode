@@ -104,7 +104,7 @@ class LiberAgent:
         if pending:
             ctx["pending_tasks"] = pending[:5]
 
-        memory_items = self.memory.all()
+        memory_items = self.memory.all() if self.config.enable_memory else []
         if memory_items:
             ctx["memory"] = memory_items[:10]
 
