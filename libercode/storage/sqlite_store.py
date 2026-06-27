@@ -166,13 +166,22 @@ class SqliteStore:
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
-        fields["updated_at"] = "datetime('now')"
-        set_clause = ", ".join(f"{k} = ?" for k in fields if k != "updated_at")
-        set_clause += ", updated_at = datetime('now')"
-        values = [v for k, v in fields.items() if k != "updated_at"]
+        SET_CLAUSE = {
+            "status": "status = ?",
+            "progress": "progress = ?",
+            "checkpoint_id": "checkpoint_id = ?",
+            "title": "title = ?",
+            "description": "description = ?",
+            "priority": "priority = ?",
+        }
+        set_parts = [SET_CLAUSE[k] for k in fields]
+        set_parts.append("updated_at = datetime('now')")
+        set_clause = ", ".join(set_parts)
+        values = list(fields.values())
         with self._get_conn() as conn:
             conn.execute(
-                f"UPDATE tasks SET {set_clause} WHERE id = ?", (*values, task_id)
+                f"UPDATE tasks SET {set_clause} WHERE id = ?",
+                (*values, task_id),
             )
 
     def task_get(self, task_id: int) -> Optional[dict]:
@@ -264,8 +273,14 @@ class SqliteStore:
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
-        set_clause = ", ".join(f"{k} = ?" for k in fields)
-        set_clause += ", updated_at = datetime('now')"
+        SET_CLAUSE = {
+            "title": "title = ?",
+            "content": "content = ?",
+            "tags": "tags = ?",
+        }
+        set_parts = [SET_CLAUSE[k] for k in fields]
+        set_parts.append("updated_at = datetime('now')")
+        set_clause = ", ".join(set_parts)
         with self._get_conn() as conn:
             conn.execute(
                 f"UPDATE scratch_notes SET {set_clause} WHERE id = ?",
