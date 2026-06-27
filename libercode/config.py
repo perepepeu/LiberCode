@@ -55,6 +55,7 @@ class LiberConfig:
 
     @classmethod
     def from_dict(cls, d: dict):
+        d = dict(d)
         provider_dict = d.pop("provider", {})
         cfg = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
         if provider_dict:
