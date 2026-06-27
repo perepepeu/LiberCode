@@ -24,7 +24,7 @@ class Renderer:
             if i > 0:
                 banner.append("\n")
             banner.append(line, style=gradient[min(i, len(gradient) - 1)])
-        self.console.print(Panel(banner, border_style="dim cyan", padding=(0, 2)))
+        self.console.print(banner)
         self.console.print()
 
     def context_bar(self, mode: str, provider_name: str, session_id: int):

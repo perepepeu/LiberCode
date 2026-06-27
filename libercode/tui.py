@@ -127,8 +127,8 @@ class LibercodeUI(App):
 
     def __init__(self, theme_name: str = "dracula", model: str = DEFAULT_MODEL):
         super().__init__()
-        self.theme_name = theme_name
-        self.theme = THEMES[theme_name]
+        self.theme_data_name = theme_name
+        self.theme_data = THEMES[theme_name]
         self.current_model = model
         self._spinner_interval = None
 
@@ -137,7 +137,7 @@ class LibercodeUI(App):
             yield Static("◆", id="logo-text")
             yield Static(" libercode", id="logo-text")
             yield Static(f" {self.current_model}", id="model-badge")
-            yield Static(f" {self.theme_name}", id="theme-badge")
+            yield Static(f" {self.theme_data_name}", id="theme-badge")
             yield Static("0 tokens", id="token-counter")
         with ScrollableContainer(id="chat-area"):
             yield RichLog(id="chat-log", markup=True, highlight=True)
@@ -148,13 +148,13 @@ class LibercodeUI(App):
             yield Static("^C quit  ^T theme  ^N session  ^L clear  Esc cancel", id="hint-bar")
 
     def on_mount(self) -> None:
-        self._apply_theme(self.theme_name)
+        self._apply_theme(self.theme_data_name)
         self._write_logo()
 
     def _apply_theme(self, name: str) -> None:
-        self.theme_name = name
-        self.theme = THEMES[name]
-        t = self.theme
+        self.theme_data_name = name
+        self.theme_data = THEMES[name]
+        t = self.theme_data
         self.screen.styles.background = t["bg"]
         for var, key in [
             ("bg", "bg"), ("bg_panel", "bg_panel"), ("bg_input", "bg_input"),
@@ -171,7 +171,7 @@ class LibercodeUI(App):
 
     def _write_logo(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         logo_text = Text(LOGO, style=Style(color=t["primary"], bold=True))
         log.write(Align.center(logo_text))
 
@@ -182,7 +182,7 @@ class LibercodeUI(App):
         welcome.append("  Model: ", Style(color=t["muted"]))
         welcome.append(self.current_model, Style(color=t["accent"]))
         welcome.append("  |  Theme: ", Style(color=t["muted"]))
-        welcome.append(self.theme_name, Style(color=t["secondary"]))
+        welcome.append(self.theme_data_name, Style(color=t["secondary"]))
         welcome.append("  |  ", Style(color=t["muted"]))
         welcome.append(datetime.now().strftime("%H:%M %d/%m/%Y"), Style(color=t["muted"]))
         welcome.append("\n")
@@ -195,7 +195,7 @@ class LibercodeUI(App):
         try:
             icon = self.query_one("#prompt-icon", Static)
             frame = SPINNER_FRAMES[self.spinner_frame % len(SPINNER_FRAMES)]
-            icon.update(Text(frame, style=Style(color=self.theme["warning"])))
+            icon.update(Text(frame, style=Style(color=self.theme_data["warning"])))
             self.spinner_frame = self.spinner_frame + 1
         except Exception:
             pass
@@ -214,7 +214,7 @@ class LibercodeUI(App):
                 self._spinner_interval = None
             try:
                 icon = self.query_one("#prompt-icon", Static)
-                icon.update(Text("›", style=Style(color=self.theme["primary"])))
+                icon.update(Text("›", style=Style(color=self.theme_data["primary"])))
             except Exception:
                 pass
 
@@ -234,14 +234,14 @@ class LibercodeUI(App):
 
     def show_thinking(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         line = Text("  ◌ ", Style(color=t["warning"]))
         line.append("thinking...", Style(color=t["muted"], italic=True))
         log.write(line)
 
     def show_response_footer(self, word_count: int, elapsed: float) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         line = Text("\n  ", Style(color=t["muted"]))
         line.append("✓ ", Style(color=t["success"]))
         line.append(f"{word_count} words  {elapsed:.1f}s", Style(color=t["muted"]))
@@ -251,7 +251,7 @@ class LibercodeUI(App):
 
     def render_user_message(self, text: str) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         header = Text()
         header.append(f"  {t['user_icon']} you ", Style(color=t["secondary"], bold=True))
         header.append(f"  {datetime.now().strftime('%H:%M')}", Style(color=t["muted"]))
@@ -261,7 +261,7 @@ class LibercodeUI(App):
 
     def render_ai_header(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         header = Text()
         header.append(f"  {t['ai_icon']} libercode ", Style(color=t["primary"], bold=True))
         header.append(f"  {self.current_model}", Style(color=t["muted"]))
@@ -269,7 +269,7 @@ class LibercodeUI(App):
 
     def render_ai_response(self, full_text: str) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         last_end = 0
         for match in CODE_BLOCK_RE.finditer(full_text):
             start = match.start()
@@ -299,7 +299,7 @@ class LibercodeUI(App):
 
     def show_theme_changed(self, name: str) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         line = Text("  ◈ Theme changed to ", Style(color=t["muted"]))
         line.append(name, Style(color=t["accent"], bold=True))
         line.append("\n")
@@ -313,24 +313,24 @@ class LibercodeUI(App):
     def show_session_cleared(self) -> None:
         log = self.query_one("#chat-log", RichLog)
         log.clear()
-        t = self.theme
+        t = self.theme_data
         log.write(Text("\n  ◈ New session started\n", Style(color=t["success"])))
 
     def show_cancelled(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         log.write(Text("\n  ✗ Cancelled\n", Style(color=t["warning"])))
 
     def show_error(self, msg: str) -> None:
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme
+        t = self.theme_data
         line = Text("\n  ✗ ", Style(color=t["error"]))
         line.append(msg, Style(color=t["error"]))
         line.append("\n")
         log.write(line)
 
     def cycle_theme(self) -> None:
-        idx = self.THEME_NAMES.index(self.theme_name)
+        idx = self.THEME_NAMES.index(self.theme_data_name)
         next_name = self.THEME_NAMES[(idx + 1) % len(self.THEME_NAMES)]
         self._apply_theme(next_name)
         self.show_theme_changed(next_name)
