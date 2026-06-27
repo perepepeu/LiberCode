@@ -577,6 +577,20 @@ class LiberAgent:
             event.app.current_buffer.text = ""
             event.app.invalidate()
 
+        @kb.add("enter")
+        def _(event):
+            buf = event.app.current_buffer
+            text = buf.text
+            if text.strip().endswith(";;"):
+                buf.text = text[:-2].rstrip()
+                event.app.exit(result=text[:-2].rstrip())
+            else:
+                buf.insert_text("\n")
+
+        @kb.add("escape", "enter")
+        def _(event):
+            event.app.exit(result=event.app.current_buffer.text)
+
         try:
             _input = create_input()
         except Exception:
