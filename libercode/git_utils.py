@@ -81,6 +81,18 @@ class GitHelper:
             args.append(branch)
         return self._run(args)
 
+    def stash(self, message: str = "") -> dict:
+        args = ["stash"]
+        if message:
+            args.extend(["push", "-m", message])
+        return self._run(args)
+
+    def stash_pop(self) -> dict:
+        return self._run(["stash", "pop"])
+
+    def stash_list(self) -> dict:
+        return self._run(["stash", "list"])
+
     def summary(self) -> str:
         if not self.is_repo():
             return "Not a git repository."
