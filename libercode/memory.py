@@ -1,6 +1,6 @@
 from typing import Optional
+from datetime import datetime
 from libercode.storage.sqlite_store import SqliteStore
-from libercode.storage.file_store import FileStore
 
 
 class ProjectMemory:
@@ -24,7 +24,8 @@ class ProjectMemory:
 
     def auto_store_context(self, key: str, content: str):
         summary = content[:500] if len(content) > 500 else content
-        self.remember(key, summary, "auto_context")
+        version_key = f"{key}:{datetime.now().strftime('%H%M%S')}"
+        self.remember(version_key, summary, "auto_context")
 
     def summarize_project(self, store) -> str:
         memories = self.all("auto_context")
