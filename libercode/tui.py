@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 from rich.align import Align
 from rich.markdown import Markdown as RichMarkdown
+from rich.panel import Panel
 from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
@@ -101,7 +102,7 @@ class LibercodeUI(App):
 
     #header-bar {
         height: 3; background: $bg_panel;
-        border-bottom: solid $border; padding: 0 2;
+        border-bottom: tall $border; padding: 0 2;
         align: left middle;
     }
     #logo-text { color: $primary; text-style: bold; }
@@ -110,7 +111,7 @@ class LibercodeUI(App):
     #token-counter { dock: right; color: $muted; margin-right: 2; }
 
     #chat-area {
-        height: 1fr; overflow-y: auto; padding: 1 2;
+        height: 1fr; overflow-y: auto; padding: 2 3;
         background: $bg;
         scrollbar-size: 1 1;
         scrollbar-color: $border;
@@ -128,6 +129,7 @@ class LibercodeUI(App):
         height: auto; min-height: 1; width: 1fr;
         border: solid $border;
         background: $bg_input; color: $text; padding: 0 1;
+        transition: border 200ms;
     }
     #prompt-input:focus { border: solid $border_act; }
     #hint-bar { height: 1; color: $muted; margin-top: 1; }
@@ -147,7 +149,13 @@ class LibercodeUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
-            yield Static("◆ libercode", id="logo-text")
+            yield Static(
+                Text.assemble(
+                    ("◆ ", Style(bold=True)),
+                    ("libercode", Style(bold=True)),
+                ),
+                id="logo-text",
+            )
             yield Static(f" {self._init_model}", id="model-badge")
             yield Static(f" {self._init_theme_name}", id="theme-badge")
             yield Static("0 tokens", id="token-counter")
@@ -157,7 +165,7 @@ class LibercodeUI(App):
             with Horizontal(id="prompt-row"):
                 yield Static("›", id="prompt-icon")
                 yield Input(placeholder="Type a message...", id="prompt-input")
-            yield Static("^C quit  ^T theme  ^N session  ^L clear  Esc cancel", id="hint-bar")
+            yield Static(Text(), id="hint-bar")
 
     def on_mount(self) -> None:
         self.theme_data_name = self._init_theme_name
@@ -165,7 +173,8 @@ class LibercodeUI(App):
         self.current_model = self._init_model
         self._spinner_interval = None
         self._apply_theme(self.theme_data_name)
-        self._write_logo()
+        self._build_hint_bar()
+        self.call_later(self._write_logo_animated)
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
@@ -176,15 +185,76 @@ class LibercodeUI(App):
         except Exception:
             pass
         try:
-            self.query_one("#theme-badge").update(f" {name}")
+            header = self.query_one("#header-bar", Horizontal)
+            header.styles.background = t["bg_panel"]
+            header.styles.border_bottom = ("tall", t["border"])
+        except Exception:
+            pass
+        try:
+            chat = self.query_one("#chat-area", ScrollableContainer)
+            chat.styles.background = t["bg"]
+            chat.styles.scrollbar_color = t["border"]
+            chat.styles.scrollbar_color_hover = t["primary"]
+        except Exception:
+            pass
+        try:
+            inp_area = self.query_one("#input-area", Vertical)
+            inp_area.styles.background = t["bg_panel"]
+            inp_area.styles.border_top = ("solid", t["border"])
+        except Exception:
+            pass
+        try:
+            inp = self.query_one("#prompt-input", Input)
+            inp.styles.background = t["bg_input"]
+            inp.styles.color = t["text"]
+            inp.styles.border = ("solid", t["border"])
+        except Exception:
+            pass
+        try:
+            icon = self.query_one("#prompt-icon", Static)
+            icon.styles.color = t["primary"]
+        except Exception:
+            pass
+        try:
+            badge = self.query_one("#theme-badge", Static)
+            badge.update(
+                Text(f" {name}", style=Style(color=t["accent"]))
+            )
+        except Exception:
+            pass
+        try:
+            model_badge = self.query_one("#model-badge", Static)
+            model_badge.update(
+                Text(f" {self.current_model}", style=Style(color=t["muted"]))
+            )
+        except Exception:
+            pass
+        self._build_hint_bar()
+
+    def _build_hint_bar(self) -> None:
+        t = self.theme_data
+        hint = Text()
+        for key, label in [
+            ("^C", "quit"), ("^T", "theme"), ("^N", "session"),
+            ("^L", "clear"), ("Esc", "cancel"),
+        ]:
+            hint.append(f" {key}", Style(color=t["accent"], bold=True))
+            hint.append(f" {label} ", Style(color=t["muted"]))
+        try:
+            bar = self.query_one("#hint-bar", Static)
+            bar.update(hint)
         except Exception:
             pass
 
-    def _write_logo(self) -> None:
+    async def _write_logo_animated(self) -> None:
         log = self.query_one("#chat-log", RichLog)
         t = self.theme_data
-        logo_text = Text(LOGO, style=Style(color=t["primary"], bold=True))
-        log.write(Align.center(logo_text))
+        import asyncio
+        for i, line in enumerate(LOGO.split("\n")):
+            log.write(Align.center(
+                Text(line, style=Style(color=t["primary"], bold=True))
+            ))
+            await asyncio.sleep(0.04)
 
         welcome = Text()
         welcome.append("  Welcome to ", Style(color=t["muted"]))
@@ -198,7 +268,26 @@ class LibercodeUI(App):
         welcome.append(datetime.now().strftime("%H:%M %d/%m/%Y"), Style(color=t["muted"]))
         welcome.append("\n")
         log.write(welcome)
+        log.write(Text("  " + "─" * 60, Style(color=t["border"])))
+        log.write(Text(""))
 
+    def _write_logo(self) -> None:
+        log = self.query_one("#chat-log", RichLog)
+        t = self.theme_data
+        logo_text = Text(LOGO, style=Style(color=t["primary"], bold=True))
+        log.write(Align.center(logo_text))
+        welcome = Text()
+        welcome.append("  Welcome to ", Style(color=t["muted"]))
+        welcome.append("libercode", Style(color=t["primary"], bold=True))
+        welcome.append(" — AI in your terminal\n", Style(color=t["muted"]))
+        welcome.append("  Model: ", Style(color=t["muted"]))
+        welcome.append(self.current_model, Style(color=t["accent"]))
+        welcome.append("  |  Theme: ", Style(color=t["muted"]))
+        welcome.append(self.theme_data_name, Style(color=t["secondary"]))
+        welcome.append("  |  ", Style(color=t["muted"]))
+        welcome.append(datetime.now().strftime("%H:%M %d/%m/%Y"), Style(color=t["muted"]))
+        welcome.append("\n")
+        log.write(welcome)
         log.write(Text("  " + "─" * 60, Style(color=t["border"])))
         log.write(Text(""))
 
@@ -231,15 +320,23 @@ class LibercodeUI(App):
 
     def watch_token_count(self, value: int) -> None:
         try:
+            t = self.theme_data
             counter = self.query_one("#token-counter", Static)
-            counter.update(f" {value:,} tokens")
+            if value < 2000:
+                color = t["muted"]
+            elif value < 6000:
+                color = t["warning"]
+            else:
+                color = t["error"]
+            counter.update(Text(f" {value:,} tokens", style=Style(color=color)))
         except Exception:
             pass
 
     def watch_current_model(self, value: str) -> None:
         try:
+            t = self.theme_data
             badge = self.query_one("#model-badge", Static)
-            badge.update(f" {value}")
+            badge.update(Text(f" {value}", style=Style(color=t["muted"])))
         except Exception:
             pass
 
@@ -263,16 +360,24 @@ class LibercodeUI(App):
     def render_user_message(self, text: str) -> None:
         log = self.query_one("#chat-log", RichLog)
         t = self.theme_data
+        log.write(Text("  " + "╌" * 58, Style(color=t["border"])))
         header = Text()
         header.append(f"  {t['user_icon']} you ", Style(color=t["secondary"], bold=True))
         header.append(f"  {datetime.now().strftime('%H:%M')}", Style(color=t["muted"]))
         log.write(header)
-        log.write(Text(f"  {text}", Style(color=t["text"])))
+        panel = Panel(
+            Text(text, style=Style(color=t["text"])),
+            border_style=Style(color=t["secondary"]),
+            padding=(0, 2),
+            expand=False,
+        )
+        log.write(Align(panel, align="right", width=70))
         log.write(Text(""))
 
     def render_ai_header(self) -> None:
         log = self.query_one("#chat-log", RichLog)
         t = self.theme_data
+        log.write(Text(""))
         header = Text()
         header.append(f"  {t['ai_icon']} libercode ", Style(color=t["primary"], bold=True))
         header.append(f"  {self.current_model}", Style(color=t["muted"]))
@@ -291,8 +396,13 @@ class LibercodeUI(App):
             lang = match.group(1) or _detect_lang(match.group(2))
             code = match.group(2).rstrip("\n")
             lines = code.split("\n")
-            header = Text(f"  ╭── {lang} ", Style(color=t["accent"], bold=True))
-            header.append(f"({len(lines)} lines)", Style(color=t["muted"]))
+            header = Text()
+            header.append("  ╭─ ", Style(color=t["border"]))
+            header.append(
+                f" {lang.upper()} ",
+                Style(color=t["bg"], bold=True, bgcolor=t["accent"]),
+            )
+            header.append(f" ─ {len(lines)} lines", Style(color=t["muted"]))
             log.write(header)
             syntax = Syntax(
                 code, lang,
@@ -303,6 +413,7 @@ class LibercodeUI(App):
                 indent_guides=True,
             )
             log.write(syntax)
+            log.write(Text(f"  ╰{'─' * 62}", Style(color=t["border"])))
             last_end = match.end()
         remaining = full_text[last_end:]
         if remaining.strip():
@@ -315,11 +426,6 @@ class LibercodeUI(App):
         line.append(name, Style(color=t["accent"], bold=True))
         line.append("\n")
         log.write(line)
-        try:
-            badge = self.query_one("#theme-badge", Static)
-            badge.update(f" {name}")
-        except Exception:
-            pass
 
     def show_session_cleared(self) -> None:
         log = self.query_one("#chat-log", RichLog)
