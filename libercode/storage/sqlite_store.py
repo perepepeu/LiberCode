@@ -85,6 +85,11 @@ class SqliteStore:
                     mode TEXT,
                     timestamp TEXT DEFAULT (datetime('now'))
                 );
+                CREATE INDEX IF NOT EXISTS idx_memory_key ON memory(key);
+                CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+                CREATE INDEX IF NOT EXISTS idx_tasks_mode ON tasks(mode);
+                CREATE INDEX IF NOT EXISTS idx_history_session ON conversation_history(session_id);
+                CREATE INDEX IF NOT EXISTS idx_scratch_tags ON scratch_notes(tags);
             """)
 
     def memory_set(self, key: str, value: str, category: str = "general"):
