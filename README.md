@@ -83,24 +83,43 @@ Press **Enter** to add new lines. Submit with **;;** at the end of a line or **A
 | `mode <build\|plan\|spec\|debug>` | Switch working mode |
 | `agent:spawn <task>` | Spawn a sub-agent |
 
-### Slash commands
+### Slash Commands
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/tasks` | List all tasks |
-| `/memory` | Show project memory |
-| `/checkpoints` | List checkpoints |
-| `/scratch` | List scratch notes |
-| `/mode` | Show current mode |
-| `/status` | Git status + session info |
-| `/context` | Show the system prompt sent to the model |
-| `/undo` | Restore files from the last checkpoint |
-| `/export [path]` | Export memory and tasks to JSON |
-| `/import <path>` | Import memory from a JSON file |
-| `/exit` | End session |
+Type `/` in the input field to open the command palette. Filter by typing after the `/` (e.g. `/git` shows only git-related commands). Navigate with ↑↓, confirm with Enter, cancel with Esc. You can also click any command with the mouse.
 
-**Tip:** Press **Tab** to cycle modes (build → plan → spec → debug → build).
+| Command    | Description                          | Handled by |
+|------------|--------------------------------------|------------|
+| /help      | Show all available commands          | UI         |
+| /clear     | Clear current session history        | UI         |
+| /session   | Start a new session                  | UI         |
+| /theme     | Cycle to next color theme            | UI         |
+| /quit      | Exit libercode                       | UI         |
+| /undo      | Remove last message pair             | Agent      |
+| /context   | Show current system prompt           | Agent      |
+| /export    | Export session to JSON file          | Agent      |
+| /import    | Show import instructions             | Agent      |
+| /model     | Switch AI model (opens picker)       | Agent      |
+| /mode      | Switch mode: build/plan/spec/debug   | Agent      |
+| /tasks     | List current tasks                   | Agent      |
+| /memory    | Show stored memory entries           | Agent      |
+| /git       | Show git status --short              | Agent      |
+| /stash     | Run git stash                        | Agent      |
+| /pop       | Run git stash pop                    | Agent      |
+
+### Keyboard Shortcuts
+
+| Key       | Action         |
+|-----------|----------------|
+| Ctrl+C    | Quit           |
+| Ctrl+T    | Cycle theme    |
+| Ctrl+N    | New session    |
+| Ctrl+L    | Clear chat     |
+| Escape    | Cancel         |
+| /         | Open command palette |
+| ↑ ↓      | Navigate palette |
+| Enter     | Confirm selection |
+
+> **Tip:** The hint bar at the bottom is clickable — you can mouse-click any shortcut label to trigger the action.
 
 ### Managing data
 
@@ -159,8 +178,9 @@ libercode config --set provider.model=claude-sonnet-4-20250514
 libercode/
   cli.py            — Entry point and command dispatch
   config.py         — Configuration, first-run wizard, project-level .libercoderc
-  agent.py          — Main agent orchestrator and interactive loop
-  ui.py             — UI rendering (hero, context bar, help)
+  agent.py          — Main agent orchestrator and command handlers
+  tui.py            — Textual TUI with palette, pickers, and clickable hints
+  ui.py             — Rich console UI rendering (hero, context bar, help)
   modes.py          — System prompt loader
   prompts/          — System prompts as .md files (build, plan, spec, debug)
   providers/        — LLM providers (builtin HuggingFace, custom OpenAI/Anthropic)
