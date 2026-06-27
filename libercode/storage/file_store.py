@@ -1,8 +1,38 @@
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from contextlib import contextmanager
+
+
+@contextmanager
+def _file_lock(path: Path):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.touch(exist_ok=True)
+    if sys.platform == "win32":
+        import msvcrt
+        with open(lock_path, "r+b") as f:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                pass
+            try:
+                yield
+            finally:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+    else:
+        import fcntl
+        with open(lock_path, "r+b") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _now() -> str:
@@ -37,7 +67,8 @@ class FileStore:
         return []
 
     def _write_json(self, path: Path, data: list):
-        path.write_text(json.dumps(data, indent=2, default=str))
+        with _file_lock(path):
+            path.write_text(json.dumps(data, indent=2, default=str))
 
     def _next_id(self, items: list) -> int:
         if not items:
