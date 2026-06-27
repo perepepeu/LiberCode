@@ -514,6 +514,11 @@ class LiberAgent:
             )
             return True
 
+        if cmd == "/context":
+            system = self._system_prompt()
+            self.console.print(Panel(system, title="System Prompt", border_style="dim"))
+            return True
+
         if cmd in ("/exit", "/quit"):
             self.console.print("[yellow]Ending session...[/]")
             summary = f"Last mode: {self.mode}, turns: {self.turn_count}"
