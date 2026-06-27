@@ -708,6 +708,7 @@ class LiberAgent:
                 self.console.print(f"[red]Error: {e}[/]")
                 continue
             print()
+            self.console.print(Markdown(full_response))
 
             if not full_response.strip():
                 self.console.print("[yellow]Empty response. Retrying...[/]")
