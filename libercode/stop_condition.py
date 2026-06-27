@@ -4,6 +4,10 @@ class StopConditionChecker:
         self._shell = shell
         self._git = git_helper
         self._memory = memory
+        self._provider = None
+
+    def set_provider(self, provider):
+        self._provider = provider
 
     def check(self, task_id: int) -> dict:
         task = self._store.task_get(task_id)
@@ -41,9 +45,21 @@ class StopConditionChecker:
             f"Reply with YES and a brief summary if done, or NO with what's remaining."
         )
 
+        verdict = None
+        if self._provider:
+            try:
+                messages = [{"role": "user", "content": verification_prompt}]
+                verdict = self._provider.chat(
+                    messages,
+                    system="You are a task completion verifier. Reply YES or NO.",
+                )
+            except Exception:
+                pass
+
         return {
             "done": False,
             "reason": "Needs verification",
             "verification_prompt": verification_prompt,
+            "verdict": verdict,
             "task": task,
         }

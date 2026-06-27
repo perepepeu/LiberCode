@@ -55,6 +55,7 @@ class LiberAgent:
         self.stop_checker = StopConditionChecker(
             self.store, self.shell, self.git, self.memory
         )
+        self.stop_checker.set_provider(self.provider)
 
         self.mode = config.mode
         self.provider = self._init_provider()
