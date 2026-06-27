@@ -527,33 +527,6 @@ class LiberAgent:
         result = self._process_tool_call(response)
         if result:
             return result
-
-        import re
-        tool_matches = re.findall(r"<tool\s+name=\"([^\"]+)\"[^>]*>.*?</tool>", response, re.DOTALL)
-        for match in tool_matches:
-            result = self._process_tool_call(match)
-            if result:
-                return result
-
-        for line in response.split("\n"):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("```"):
-                continue
-            if (
-                stripped.startswith("file:")
-                or (stripped.startswith("!") and len(stripped) > 1)
-                or stripped.startswith("task:")
-                or stripped.startswith("checkpoint")
-                or stripped.startswith("scratch ")
-                or stripped.startswith("memory ")
-                or stripped.startswith("git ")
-                or stripped.startswith("mode ")
-                or stripped.startswith("agent:")
-            ):
-                result = self._process_tool_call(stripped)
-                if result:
-                    return result
-
         return ""
 
     def _make_pt_session(self):
