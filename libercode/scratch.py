@@ -24,6 +24,8 @@ class ScratchNotes:
         return self._store.scratch_list(tag)
 
     def search(self, query: str) -> list:
+        if hasattr(self._store, "scratch_search"):
+            return self._store.scratch_search(query)
         results = []
         for note in self._store.scratch_list():
             if (

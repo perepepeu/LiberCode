@@ -307,6 +307,14 @@ class SqliteStore:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    def scratch_search(self, query: str) -> list:
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM scratch_notes WHERE title LIKE ? OR content LIKE ? ORDER BY updated_at DESC",
+                (f"%{query}%", f"%{query}%"),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def session_start(self, project_root: str, mode: str = "build") -> int:
         with self._get_conn() as conn:
             cur = conn.execute(
