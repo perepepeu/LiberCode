@@ -88,12 +88,12 @@ class GitHelper:
             modified = [
                 l
                 for l in status["stdout"].split("\n")
-                if l.startswith(" M") or l.startswith("M")
+                if l.startswith(" M") or (len(l) > 1 and l[0] == " " and l[1] == "M")
             ]
             staged = [
                 l
                 for l in status["stdout"].split("\n")
-                if l.startswith(" M") or l.startswith("M")
+                if l.startswith("M ")
             ]
             untracked = [l for l in status["stdout"].split("\n") if l.startswith("?")]
             if modified:
