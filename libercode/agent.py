@@ -1,5 +1,8 @@
+import asyncio
+import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -8,7 +11,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.prompt import Prompt
+from rich.style import Style
 from rich.table import Table
+from rich.text import Text
 from rich import box
 from prompt_toolkit import PromptSession as PTSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -27,6 +32,7 @@ from libercode.scratch import ScratchNotes
 from libercode.stop_condition import StopConditionChecker
 from libercode.modes import get_system_prompt
 from libercode.ui import Renderer
+from libercode.tui import CommandEvent, ShowPickerEvent, PickerSelectedEvent
 
 
 class LiberAgent:
@@ -59,6 +65,13 @@ class LiberAgent:
         self.turn_count = 0
         self.total_tokens = 0
         self._spawn_depth = 0
+        self.available_models = [
+            "Qwen2.5-Coder-7B-Instruct",
+            "Qwen2.5-Coder-14B-Instruct",
+            "deepseek-coder-v2",
+            "codestral-22b",
+            "llama-3.1-70b",
+        ]
         try:
             self._enc = tiktoken.encoding_for_model("gpt-4")
         except Exception:
@@ -758,3 +771,261 @@ class LiberAgent:
         return {"build": "green", "plan": "yellow", "spec": "blue"}.get(
             self.mode, "white"
         )
+
+    # ── Command Event Handlers ──
+
+    async def on_command_event(self, event: CommandEvent) -> None:
+        cmd  = event.command.strip()
+        args = event.args.strip()
+        dispatch = {
+            "undo":    self._cmd_undo,
+            "context": self._cmd_context,
+            "export":  self._cmd_export,
+            "import":  self._cmd_import,
+            "model":   lambda: self._cmd_model(args),
+            "mode":    lambda: self._cmd_mode(args),
+            "tasks":   self._cmd_tasks,
+            "memory":  self._cmd_memory,
+            "git":     self._cmd_git,
+            "stash":   self._cmd_stash,
+            "pop":     self._cmd_pop,
+        }
+        fn = dispatch.get(cmd)
+        if fn:
+            try:
+                await fn()
+            except Exception as e:
+                self.ui.show_error(f"/{cmd} failed: {e}")
+        else:
+            self.ui.show_error(f"Unknown command: /{cmd}")
+
+    async def on_picker_selected_event(self, event: PickerSelectedEvent) -> None:
+        if event.kind == "model":
+            self.model = event.value
+            self.ui.current_model = event.value
+            log = self.ui.query_one("#chat-log")
+            t   = self.ui.theme_data
+            log.write(Text(
+                f"\n  ◈ Model switched to {event.value}\n",
+                Style(color=t["accent"], bold=True)
+            ))
+        elif event.kind == "mode":
+            self.mode = event.value
+            log = self.ui.query_one("#chat-log")
+            t   = self.ui.theme_data
+            log.write(Text(
+                f"\n  ◈ Mode switched to {event.value}\n",
+                Style(color=t["accent"], bold=True)
+            ))
+
+    async def _cmd_undo(self) -> None:
+        log = self.ui.query_one("#chat-log")
+        t   = self.ui.theme_data
+        history = self.store.history_get(self.session_id, limit=100)
+        removed = 0
+        for role in ["assistant", "user"]:
+            for i in range(len(history) - 1, -1, -1):
+                if history[i].get("role") == role:
+                    history.pop(i)
+                    removed += 1
+                    break
+        if removed == 0:
+            self.ui.show_error("Nothing to undo.")
+        else:
+            log.write(Text(
+                "  ↩ Last message pair removed from history\n",
+                Style(color=t["warning"])
+            ))
+
+    async def _cmd_context(self) -> None:
+        log = self.ui.query_one("#chat-log")
+        t   = self.ui.theme_data
+        prompt = getattr(self, "system_prompt", None) or "(no system prompt set)"
+        log.write(Text("\n  System Prompt\n", Style(color=t["primary"], bold=True)))
+        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+        for line in prompt.splitlines():
+            log.write(Text(f"  {line}", Style(color=t["text"])))
+        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+
+    async def _cmd_export(self) -> None:
+        log  = self.ui.query_one("#chat-log")
+        t    = self.ui.theme_data
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = Path(f"libercode_export_{ts}.json")
+        try:
+            history = self.store.history_get(self.session_id, limit=1000)
+            payload = {
+                "exported_at": datetime.now().isoformat(),
+                "model":       getattr(self, "model", ""),
+                "mode":        self.mode,
+                "messages":    history,
+                "memory":      self.memory.all(),
+                "tasks":       self.tasks.list(),
+            }
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+            log.write(Text(
+                f"\n  ✓ Session exported to {path}\n",
+                Style(color=t["success"], bold=True)
+            ))
+        except Exception as e:
+            self.ui.show_error(f"Export failed: {e}")
+
+    async def _cmd_import(self) -> None:
+        log = self.ui.query_one("#chat-log")
+        t   = self.ui.theme_data
+        log.write(Text("\n  Import\n", Style(color=t["primary"], bold=True)))
+        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+        log.write(Text(
+            "  To import a session, run:\n"
+            "  libercode --import libercode_export_<timestamp>.json\n",
+            Style(color=t["muted"])
+        ))
+        exports = sorted(Path(".").glob("libercode_export_*.json"))
+        if exports:
+            log.write(Text("  Available exports:", Style(color=t["text"])))
+            for f in exports:
+                log.write(Text(f"    {f.name}", Style(color=t["info"])))
+        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+
+    async def _cmd_model(self, args: str) -> None:
+        if not args:
+            current = getattr(self, "model", "")
+            self.ui.post_message(ShowPickerEvent(
+                kind="model",
+                items=self.available_models,
+                current=current,
+            ))
+        else:
+            match = next(
+                (m for m in self.available_models
+                 if args.lower() in m.lower()),
+                None
+            )
+            if match:
+                self.model = match
+                self.ui.current_model = match
+                log = self.ui.query_one("#chat-log")
+                t   = self.ui.theme_data
+                log.write(Text(
+                    f"\n  ◈ Model switched to {match}\n",
+                    Style(color=t["accent"], bold=True)
+                ))
+            else:
+                self.ui.show_error(
+                    f"Model '{args}' not found. "
+                    f"Available: {', '.join(self.available_models)}"
+                )
+
+    VALID_MODES = ["build", "plan", "spec", "debug"]
+
+    async def _cmd_mode(self, args: str) -> None:
+        if not args:
+            self.ui.post_message(ShowPickerEvent(
+                kind="mode",
+                items=self.VALID_MODES,
+                current=self.mode,
+            ))
+        elif args in self.VALID_MODES:
+            self.mode = args
+            log = self.ui.query_one("#chat-log")
+            t   = self.ui.theme_data
+            log.write(Text(
+                f"\n  ◈ Mode switched to {args}\n",
+                Style(color=t["accent"], bold=True)
+            ))
+        else:
+            self.ui.show_error(
+                f"Invalid mode '{args}'. "
+                f"Valid modes: {', '.join(self.VALID_MODES)}"
+            )
+
+    async def _cmd_tasks(self) -> None:
+        log = self.ui.query_one("#chat-log")
+        t   = self.ui.theme_data
+        log.write(Text("\n  Tasks\n", Style(color=t["primary"], bold=True)))
+        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+        tasks = self.tasks.list()
+        if not tasks:
+            log.write(Text(
+                "  No tasks. Start a conversation to generate tasks.\n",
+                Style(color=t["muted"])
+            ))
+        else:
+            for i, task in enumerate(tasks):
+                done  = task.get("done", False)
+                icon  = "✓" if done else "○"
+                color = t["success"] if done else t["text"]
+                log.write(Text(
+                    f"  {icon} [{i+1}] {task.get('text', '')}",
+                    Style(color=color)
+                ))
+        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+
+    async def _cmd_memory(self) -> None:
+        log = self.ui.query_one("#chat-log")
+        t   = self.ui.theme_data
+        log.write(Text("\n  Memory\n", Style(color=t["primary"], bold=True)))
+        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+        items = self.memory.all()
+        if not items:
+            log.write(Text(
+                "  No memory entries stored yet.\n",
+                Style(color=t["muted"])
+            ))
+        else:
+            for entry in items:
+                key = entry.get("key", "")
+                val = entry.get("value", "")
+                line = Text()
+                line.append(f"  {key}: ", Style(color=t["accent"], bold=True))
+                line.append(val,          Style(color=t["text"]))
+                log.write(line)
+        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+
+    async def _run_git(self, *args: str) -> str:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            out = (stdout or b"").decode().strip()
+            err = (stderr or b"").decode().strip()
+            combined = (out + "\n" + err).strip()
+            return combined if combined else "(no output)"
+        except FileNotFoundError:
+            raise RuntimeError("git not found in PATH")
+        except Exception as e:
+            raise RuntimeError(str(e))
+
+    def _write_git_output(self, title: str, output: str) -> None:
+        log = self.ui.query_one("#chat-log")
+        t   = self.ui.theme_data
+        log.write(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
+        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+        for line in output.splitlines():
+            if line.startswith(("M ", " M")):
+                color = t["warning"]
+            elif line.startswith(("A ", " A")):
+                color = t["success"]
+            elif line.startswith(("D ", " D")):
+                color = t["error"]
+            elif line.startswith("??"):
+                color = t["muted"]
+            else:
+                color = t["text"]
+            log.write(Text(f"  {line}", Style(color=color)))
+        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+
+    async def _cmd_git(self) -> None:
+        output = await self._run_git("status", "--short")
+        self._write_git_output("git status", output)
+
+    async def _cmd_stash(self) -> None:
+        output = await self._run_git("stash")
+        self._write_git_output("git stash", output)
+
+    async def _cmd_pop(self) -> None:
+        output = await self._run_git("stash", "pop")
+        self._write_git_output("git stash pop", output)
