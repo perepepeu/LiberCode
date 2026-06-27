@@ -10,18 +10,14 @@ from rich.markdown import Markdown
 from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
-import sys as _sys
 from prompt_toolkit import PromptSession as PTSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.output import create_output
-from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.input import create_input
 
 from libercode.config import LiberConfig
 from libercode.providers import BuiltinProvider, CustomProvider
 from libercode.storage.sqlite_store import SqliteStore
-from libercode.storage.file_store import FileStore
 from libercode.shell import ShellExecutor
 from libercode.git_utils import GitHelper
 from libercode.memory import ProjectMemory
