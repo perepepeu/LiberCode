@@ -144,6 +144,13 @@ class LiberAgent:
         return messages
 
     def _process_tool_call(self, text: str) -> Optional[str]:
+        import re
+        tool_pattern = re.compile(r"<tool\s+name=\"([^\"]+)\"[^>]*>(.*?)</tool>", re.DOTALL)
+        for match in tool_pattern.finditer(text):
+            tool_name = match.group(1).strip()
+            tool_body = match.group(2).strip()
+            return self._dispatch_tool(tool_name, tool_body)
+
         lines = text.split("\n")
         for i, line in enumerate(lines):
             stripped = line.strip()
@@ -238,6 +245,66 @@ class LiberAgent:
                 task_desc = stripped[len("agent:spawn ") :].strip()
                 return self._spawn_subagent(task_desc)
 
+        return None
+
+    def _dispatch_tool(self, name: str, body: str) -> Optional[str]:
+        if name == "shell":
+            return self._exec_shell(body)
+        if name == "file:read":
+            return self._read_file(body.strip().strip("`'\""))
+        if name == "file:write":
+            parts = body.split("\n", 1)
+            path = parts[0].strip().strip("`'\"")
+            content = parts[1].strip() if len(parts) > 1 else ""
+            return self._write_file(path, content)
+        if name == "file:edit":
+            parts = body.split("|||")
+            if len(parts) == 3:
+                return self._edit_file(
+                    parts[0].strip(), parts[1].strip(), parts[2].strip()
+                )
+            return "[Error] file:edit requires <tool name=\"file:edit\">path ||| old ||| new</tool>"
+        if name == "task:create":
+            parts = body.split("|||", 1)
+            title = parts[0].strip()
+            desc = parts[1].strip() if len(parts) > 1 else ""
+            return self._task_create(title, desc)
+        if name == "task:update":
+            parts = body.strip().split(" ", 2)
+            if len(parts) >= 2:
+                tid = int(parts[0])
+                kwargs = {}
+                if len(parts) >= 3:
+                    for kv in parts[2].split(","):
+                        if "=" in kv:
+                            k, v = kv.split("=", 1)
+                            kwargs[k.strip()] = v.strip()
+                return self._task_update(tid, **kwargs)
+        if name == "checkpoint":
+            return self._save_checkpoint(body.strip() or "manual checkpoint")
+        if name == "scratch":
+            return self._scratch_note(body.strip())
+        if name == "memory":
+            content = body.strip()
+            if "=" in content:
+                key, val = content.split("=", 1)
+                self.memory.remember(key.strip(), val.strip())
+                return f"[Memory] Stored: {key.strip()}"
+            return f"[Memory] Key not found. Use `memory key = value`"
+        if name == "git":
+            return self._exec_shell(f"git {body.strip()}")
+        if name == "mode":
+            new_mode = body.strip()
+            if new_mode in ("build", "plan", "spec"):
+                self.mode = new_mode
+                self.store.session_end(self.session_id)
+                self.session_id = self.store.session_start(
+                    str(Path.cwd().resolve()), new_mode
+                )
+                return None
+            return f"[Mode] Invalid mode. Use build, plan, or spec."
+        if name == "agent:spawn":
+            return self._spawn_subagent(body.strip())
         return None
 
     def _exec_shell(self, cmd: str) -> str:
@@ -500,6 +567,10 @@ class LiberAgent:
         return False
 
     def _extract_next_tool_call(self, response: str) -> Optional[str]:
+        import re
+        tool_match = re.search(r"<tool\s+name=\"([^\"]+)\"[^>]*>.*?</tool>", response, re.DOTALL)
+        if tool_match:
+            return tool_match.group(0)
         for line in response.split("\n"):
             stripped = line.strip()
             if not stripped or stripped.startswith("```"):
@@ -522,6 +593,13 @@ class LiberAgent:
         result = self._process_tool_call(response)
         if result:
             return result
+
+        import re
+        tool_matches = re.findall(r"<tool\s+name=\"([^\"]+)\"[^>]*>.*?</tool>", response, re.DOTALL)
+        for match in tool_matches:
+            result = self._process_tool_call(match)
+            if result:
+                return result
 
         for line in response.split("\n"):
             stripped = line.strip()
