@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import tiktoken
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -59,6 +60,10 @@ class LiberAgent:
         self.session_id = self._init_session(project_root)
         self.turn_count = 0
         self.total_tokens = 0
+        try:
+            self._enc = tiktoken.encoding_for_model("gpt-4")
+        except Exception:
+            self._enc = tiktoken.get_encoding("cl100k_base")
 
     def _init_provider(self):
         pc = self.config.provider
@@ -658,7 +663,7 @@ class LiberAgent:
             self.store.history_append(
                 self.session_id, "assistant", full_response, self.mode
             )
-            self.total_tokens += (len(user_input) + len(full_response)) // 4
+            self.total_tokens += len(self._enc.encode(user_input + full_response))
 
             tool_result = self._process_response(full_response)
             if tool_result:
