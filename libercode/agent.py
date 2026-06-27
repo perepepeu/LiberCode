@@ -497,6 +497,23 @@ class LiberAgent:
             self.console.print(f"Tasks: {len(self.tasks.list())} total")
             return True
 
+        if cmd == "/undo":
+            cps = self.checkpointer.list()
+            if not cps:
+                self.console.print("[dim]No checkpoints to undo[/]")
+                return True
+            latest = cps[0]
+            snapshot = latest.get("snapshot", {})
+            files = snapshot.get("files", {})
+            for rel_path, content in files.items():
+                full_path = Path(self.shell.workdir) / rel_path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content, encoding="utf-8")
+            self.console.print(
+                f"[green]Restored {len(files)} files from checkpoint {latest['id']}[/]"
+            )
+            return True
+
         if cmd in ("/exit", "/quit"):
             self.console.print("[yellow]Ending session...[/]")
             summary = f"Last mode: {self.mode}, turns: {self.turn_count}"
