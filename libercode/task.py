@@ -1,5 +1,8 @@
 from typing import Optional
 
+VALID_STATUSES = {"pending", "in_progress", "completed", "failed", "paused"}
+VALID_PRIORITIES = {"low", "medium", "high"}
+
 
 class TaskTracker:
     def __init__(self, store):
@@ -13,9 +16,15 @@ class TaskTracker:
         mode: str = "build",
         priority: str = "medium",
     ) -> int:
+        if priority not in VALID_PRIORITIES:
+            priority = "medium"
         return self._store.task_create(title, description, parent_id, mode, priority)
 
     def update(self, task_id: int, **kwargs):
+        if "status" in kwargs and kwargs["status"] not in VALID_STATUSES:
+            raise ValueError(f"Invalid status: {kwargs['status']}. Must be one of {VALID_STATUSES}")
+        if "priority" in kwargs and kwargs["priority"] not in VALID_PRIORITIES:
+            kwargs["priority"] = "medium"
         self._store.task_update(task_id, **kwargs)
 
     def start(self, task_id: int):
