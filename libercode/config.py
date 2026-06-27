@@ -90,8 +90,18 @@ class LiberConfig:
 
     def save_global(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(GLOBAL_CONFIG_PATH, "w") as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False)
+        if self.provider.api_key:
+            import stat
+            config_path = str(GLOBAL_CONFIG_PATH)
+            with open(config_path, "w") as f:
+                yaml.dump(self.to_dict(), f, default_flow_style=False)
+            try:
+                os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+        else:
+            with open(GLOBAL_CONFIG_PATH, "w") as f:
+                yaml.dump(self.to_dict(), f, default_flow_style=False)
 
 
 def first_run_wizard():
@@ -147,6 +157,11 @@ def first_run_wizard():
     cfg.save_global()
     console.print("[bold green]✓ Configuration saved![/]")
     console.print(f"  Config: {GLOBAL_CONFIG_PATH}")
+    if cfg.provider.api_key:
+        console.print(
+            "[yellow]⚠ Security note: API key is stored in plaintext. "
+            "Restrict file permissions and avoid sharing this config.[/]"
+        )
     console.print(
         "\n[dim]Tip: Create a [bold].libercoderc[/] file in any project to override settings.[/]"
     )
