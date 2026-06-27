@@ -1,6 +1,9 @@
 import subprocess
+import re
 from pathlib import Path
 from typing import Optional
+
+VALID_BRANCH_RE = re.compile(r"^[a-zA-Z0-9_./-]+$")
 
 
 class GitHelper:
@@ -63,9 +66,13 @@ class GitHelper:
         return self._run(["diff", base])
 
     def checkout(self, branch: str) -> dict:
+        if not VALID_BRANCH_RE.match(branch):
+            return {"success": False, "stdout": "", "stderr": f"Invalid branch name: {branch}", "exit_code": -1}
         return self._run(["checkout", branch])
 
     def create_branch(self, name: str) -> dict:
+        if not VALID_BRANCH_RE.match(name):
+            return {"success": False, "stdout": "", "stderr": f"Invalid branch name: {name}", "exit_code": -1}
         return self._run(["checkout", "-b", name])
 
     def push(self, remote: str = "origin", branch: Optional[str] = None) -> dict:
