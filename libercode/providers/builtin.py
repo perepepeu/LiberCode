@@ -1,7 +1,11 @@
 import json
+import time
 import requests
 from typing import Optional, Generator
 from libercode.providers.base import BaseProvider
+
+MAX_RETRIES = 3
+BACKOFF_BASE = 2
 
 
 class BuiltinProvider(BaseProvider):
@@ -17,6 +21,31 @@ class BuiltinProvider(BaseProvider):
     def name(self) -> str:
         return f"builtin/{self._model}"
 
+    def _request_with_retry(self, url: str, payload: dict, stream: bool = False):
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = requests.post(url, json=payload, stream=stream, timeout=120)
+                if resp.status_code == 429:
+                    wait = BACKOFF_BASE ** attempt
+                    time.sleep(wait)
+                    continue
+                if resp.status_code >= 500:
+                    wait = BACKOFF_BASE ** attempt
+                    time.sleep(wait)
+                    continue
+                return resp
+            except requests.ConnectionError:
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(BACKOFF_BASE ** attempt)
+                    continue
+                raise
+            except requests.Timeout:
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(BACKOFF_BASE ** attempt)
+                    continue
+                raise
+        return None
+
     def chat(
         self,
         messages: list,
@@ -31,7 +60,9 @@ class BuiltinProvider(BaseProvider):
             "temperature": temperature or 0.7,
         }
         try:
-            resp = requests.post(url, json=payload, timeout=120)
+            resp = self._request_with_retry(url, payload)
+            if resp is None:
+                return "[Error] Max retries exceeded"
             if resp.status_code == 200:
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
@@ -57,7 +88,10 @@ class BuiltinProvider(BaseProvider):
             "stream": True,
         }
         try:
-            resp = requests.post(url, json=payload, stream=True, timeout=120)
+            resp = self._request_with_retry(url, payload, stream=True)
+            if resp is None:
+                yield "[Error] Max retries exceeded"
+                return
             if resp.status_code == 503:
                 yield self._handle_loading(resp)
                 return
@@ -91,4 +125,4 @@ class BuiltinProvider(BaseProvider):
             estimated = data.get("estimated_time", 30)
             return f"[Model is loading - estimated wait: {estimated}s. Please retry in a moment.]"
         except Exception:
-            return "[Model is loading. Please retry shortly.]"
+            return "[Model is loading. Please retry shortly.]" 
