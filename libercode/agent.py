@@ -58,6 +58,7 @@ class LiberAgent:
         self.session_id = self._init_session(project_root)
         self.turn_count = 0
         self.total_tokens = 0
+        self._spawn_depth = 0
         try:
             self._enc = tiktoken.encoding_for_model("gpt-4")
         except Exception:
@@ -383,6 +384,8 @@ class LiberAgent:
     def _spawn_subagent(self, task_desc: str) -> str:
         if self.mode == "plan":
             return "[Error] Cannot spawn agents in plan mode."
+        if self._spawn_depth >= 2:
+            return "[Error] Maximum sub-agent nesting depth (2) reached."
         tid = self.tasks.create(
             f"Sub-agent: {task_desc[:50]}", task_desc, mode=self.mode
         )
@@ -397,10 +400,14 @@ class LiberAgent:
         )
 
         messages = [{"role": "user", "content": prompt}]
-        response = self.provider.chat(
-            messages,
-            system="You are a helpful coding sub-agent. Be concise and focused.",
-        )
+        self._spawn_depth += 1
+        try:
+            response = self.provider.chat(
+                messages,
+                system="You are a helpful coding sub-agent. Be concise and focused.",
+            )
+        finally:
+            self._spawn_depth -= 1
 
         self.tasks.complete(tid)
         self.memory.auto_store_context(f"subagent:{tid}", response[:300])
