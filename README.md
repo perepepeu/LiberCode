@@ -11,15 +11,18 @@ libercode
 
 - **Terminal-native** — runs in your terminal, reads/edits files, executes shell commands, works with Git
 - **Cross-session memory** — remembers your project context between sessions
-- **Three working modes** — `build` for active development, `plan` for read-only analysis, `spec` for coordinating multi-step specs
+- **Four working modes** — `build`, `plan`, `spec`, and `debug`
 - **Automatic checkpoints** — snapshots project state at configurable intervals
+- **Undo support** — revert to the last checkpoint with `/undo`
 - **Task tracking** — create, update, pause, resume tasks with status tracking
 - **Scratch notes** — quick notes that persist across sessions
-- **Sub-agent spawning** — spins up helper agents for parallel work
+- **Sub-agent spawning** — spins up helper agents for parallel work (max depth: 2)
 - **Stop condition checking** — verifies whether a job is truly done before stopping
 - **Built-in free provider** — works out of the box with HuggingFace Inference API (no API key needed)
 - **Custom providers** — OpenAI, Anthropic, or any OpenAI-compatible API
 - **Project-level config** — `.libercoderc` file for per-project settings
+- **Multiline input** — press Enter for new lines, `;;` or Alt+Enter to submit
+- **Export/import** — port memory and tasks between projects
 
 ## Quick start
 
@@ -32,11 +35,14 @@ libercode
 
 # Or run in a specific mode
 libercode --mode plan
+libercode --mode debug
 libercode exec "explain the architecture of this project" --mode plan
 ```
 
 The first run wizard will ask which provider to use. Choose **builtin** for zero-setup
 (free HuggingFace models) or **custom** to use your own API key.
+
+Set `HF_TOKEN` in your environment for authenticated HuggingFace requests (optional).
 
 ## Usage
 
@@ -46,6 +52,7 @@ The first run wizard will ask which provider to use. Choose **builtin** for zero
 libercode
 libercode --mode plan
 libercode --mode spec
+libercode --mode debug
 ```
 
 ### One-shot commands
@@ -55,7 +62,11 @@ libercode exec "add error handling to the main function"
 libercode exec "list all TODO comments in the codebase" --mode plan
 ```
 
-### Commands inside the session
+### Multiline input
+
+Press **Enter** to add new lines. Submit with **;;** at the end of a line or **Alt+Enter**.
+
+### Tool commands
 
 | Command | Description |
 |---------|-------------|
@@ -69,8 +80,8 @@ libercode exec "list all TODO comments in the codebase" --mode plan
 | `checkpoint [summary]` | Save a checkpoint |
 | `scratch <content>` | Write a quick note |
 | `memory <key> = <value>` | Store in project memory |
-| `mode <build\|plan\|spec>` | Switch working mode |
-| `agent:spawn <task description>` | Spawn a sub-agent |
+| `mode <build\|plan\|spec\|debug>` | Switch working mode |
+| `agent:spawn <task>` | Spawn a sub-agent |
 
 ### Slash commands
 
@@ -83,7 +94,13 @@ libercode exec "list all TODO comments in the codebase" --mode plan
 | `/scratch` | List scratch notes |
 | `/mode` | Show current mode |
 | `/status` | Git status + session info |
+| `/context` | Show the system prompt sent to the model |
+| `/undo` | Restore files from the last checkpoint |
+| `/export [path]` | Export memory and tasks to JSON |
+| `/import <path>` | Import memory from a JSON file |
 | `/exit` | End session |
+
+**Tip:** Press **Tab** to cycle modes (build → plan → spec → debug → build).
 
 ### Managing data
 
@@ -112,6 +129,7 @@ provider:
   temperature: 0.3
 enable_checkpoints: true
 checkpoint_interval: 10
+max_turns: 30
 ```
 
 ### Custom providers
@@ -132,33 +150,44 @@ libercode config --set provider.model=claude-sonnet-4-20250514
 |------|-------------|
 | **build** | Active development. Can read/edit files, run commands, commit code. |
 | **plan** | Read-only analysis. Explores code, researches, produces plans but never writes. |
-| **spec** | Spec-following coordinator. Takes a specification, breaks it into tasks, coordinates execution across sub-agents, verifies completion. |
+| **spec** | Spec-following coordinator. Takes a specification, breaks it into tasks, coordinates execution. |
+| **debug** | Diagnostic specialist. Analyzes errors, traces issues, diagnoses problems. |
 
 ## Architecture
 
 ```
 libercode/
-  cli.py          — Entry point and command dispatch
-  config.py       — Configuration, first-run wizard, project-level .libercoderc
-  agent.py        — Main agent orchestrator and interactive loop
-  modes.py        — System prompts for build/plan/spec modes
-  providers/      — LLM providers (builtin HuggingFace, custom OpenAI/Anthropic)
-  shell.py        — Shell + file read/write/edit/search operations
-  git_utils.py    — Git integration
-  memory.py       — Cross-session project memory
-  checkpoint.py   — Automatic project snapshots
-  task.py         — Task tracking with pause/resume
-  scratch.py      — Persistent scratch notes
-  stop_condition.py — Verifies job completion
-  storage/        — SQLite and file-based persistence
+  cli.py            — Entry point and command dispatch
+  config.py         — Configuration, first-run wizard, project-level .libercoderc
+  agent.py          — Main agent orchestrator and interactive loop
+  ui.py             — UI rendering (hero, context bar, help)
+  modes.py          — System prompt loader
+  prompts/          — System prompts as .md files (build, plan, spec, debug)
+  providers/        — LLM providers (builtin HuggingFace, custom OpenAI/Anthropic)
+  shell.py          — Shell + file read/write/edit/search with forbidden command list
+  git_utils.py      — Git integration with branch validation and stash support
+  memory.py         — Cross-session project memory with versioned context
+  checkpoint.py     — Automatic project snapshots with size limits
+  task.py           — Task tracking with validation
+  scratch.py        — Persistent scratch notes
+  stop_condition.py — Verifies job completion via LLM
+  storage/          — SQLite persistence with WAL mode and indexes
 ```
+
+## Security
+
+- **Forbidden commands** — destructive shell commands (rm -rf /, dd, format, etc.) are blocked
+- **Path traversal protection** — file reads/writes are restricted to the project directory
+- **Config file permissions** — API key config files are set to user-only read/write
+- **Sub-agent depth limit** — recursive spawning is capped at depth 2
 
 ## Development
 
 ```bash
-git clone https://github.com/libercode/libercode
+git clone https://github.com/perepepeu/LiberCode
 cd libercode
 pip install -e .
+python -m pytest tests/  # Run 57 tests
 libercode
 ```
 
