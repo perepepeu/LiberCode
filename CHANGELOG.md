@@ -49,3 +49,11 @@
 ### Added
 - Tab key cycles agent mode (build → plan → spec → debug → build) with
   a mode badge in the header bar and a "⇄ Mode → ..." message in chat log.
+- AI responses rendered with full Markdown and syntax-highlighted code blocks
+  after streaming completes (bold, inline code, fenced code with line numbers).
+- Mode pill next to input shows active mode (build/plan/spec/debug) with
+  distinct colors that update instantly on Tab and /mode.
+- `/sessions` command lists past sessions and `/sessions <id>` restores
+  history into the current chat.
+- `/import` now fully restores messages, memory, tasks, and mode from
+  exported JSON files (not just instructions).

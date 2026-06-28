@@ -37,8 +37,10 @@ Saves the current session (messages, memory, tasks, model, mode) to a JSON file
 named `libercode_export_YYYYMMDD_HHMMSS.json` in the current working directory.
 
 ### /import
-Displays instructions for importing a previously exported session.
-Lists any `libercode_export_*.json` files found in the current directory.
+Without arguments: displays a list of available `libercode_export_*.json` files in the
+current directory with their sizes.
+With argument: imports messages, memory, and tasks from the specified JSON file.
+Example: `/import libercode_export_20260627_120000.json`
 
 ### /model [name]
 Without arguments: opens an interactive picker showing all available models.
@@ -72,3 +74,9 @@ Runs `git stash` and displays the output.
 
 ### /pop
 Runs `git stash pop` and displays the output.
+
+### /sessions [id]
+Without arguments: lists all past sessions for the current project with IDs, modes,
+dates, and summaries. The current session is marked with ▶.
+With argument: restores the specified session by loading its conversation history
+into the current chat log. Use `/sessions <id>` to resume where you left off.
