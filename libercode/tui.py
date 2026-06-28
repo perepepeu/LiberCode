@@ -641,7 +641,7 @@ class APIKeyModal(ModalScreen):
 
     BINDINGS = [
         Binding("escape", "dismiss_none", "Close", priority=True),
-        Binding("enter",  "confirm",      "Submit"),
+        Binding("enter",  "confirm",      "Submit", priority=True),
     ]
 
     CSS = """
@@ -1336,6 +1336,9 @@ class LibercodeUI(App):
                 active_modal = screen
                 break
             if isinstance(screen, ModelModal):
+                active_modal = screen
+                break
+            if isinstance(screen, APIKeyModal):
                 active_modal = screen
                 break
 
@@ -2411,13 +2414,15 @@ class LibercodeUI(App):
             return
 
         import threading
-        from libercode.providers.registry import PROVIDER_REGISTRY
 
         current_provider = agent.provider
         provider_name = current_provider.display_name
         current_model = getattr(current_provider, 'model', '')
 
-        available = list(getattr(current_provider, 'available_models', []))
+        try:
+            available = current_provider.list_models()
+        except Exception:
+            available = list(getattr(current_provider, 'available_models', []))
         if not available:
             default = getattr(current_provider, 'default_model', '')
             if default:
