@@ -87,3 +87,16 @@
   and run appropriate test/linter with AI failure summaries.
 - `/config` displays current configuration with syntax highlighting and
   supports `key=value` setting with nested key support (e.g. `provider.model`).
+- BaseProvider abstract interface — all providers implement a common contract
+  with `chat_stream()`, `validate()`, `list_models()`, and `mask_key()`.
+- 8 new provider implementations: OpenAI, Anthropic, Google, Groq, OpenRouter,
+  Ollama, DeepSeek, and Together — each using native SDK for streaming.
+- Provider registry with env variable auto-detection and `build_provider()`
+  factory for instant provider creation with validation.
+- `/provider` command — list all providers with status, switch provider at
+  runtime, or run interactive setup wizard with API key entry.
+- `swap_provider()` for atomic runtime provider switching with rollback on failure.
+- `save_provider_config()` for atomic TOML config writes (temp file + rename).
+- Dynamic `available_models` property pulled from current provider's `list_models()`.
+- Optional dependency groups in pyproject.toml: `pip install libercode[openai]`,
+  `pip install libercode[anthropic]`, `pip install libercode[all]`, etc.
