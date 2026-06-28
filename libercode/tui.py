@@ -2207,17 +2207,23 @@ class LibercodeUI(App):
             self._agent is not None
             and getattr(self._agent, "_wizard_state", {}).get("step") == 3
         ):
-            api_key = text.strip()
             self.query_one("#prompt-input", Input).value = ""
             state    = self._agent._wizard_state
             provider = state.get("provider", "")
             agent    = self._agent
             tui      = self
 
-            async def _wizard_finish():
-                await agent._tui_wizard_finish(provider, api_key, tui)
+            def _on_wizard_key(api_key):
+                if api_key:
+                    async def _wizard_finish():
+                        await agent._tui_wizard_finish(provider, api_key, tui)
+                    self.run_worker(_wizard_finish(), exclusive=False)
 
-            self.run_worker(_wizard_finish(), exclusive=False)
+            try:
+                self.query_one("#prompt-input", Input).blur()
+            except Exception:
+                pass
+            self.push_screen(APIKeyModal(provider), _on_wizard_key)
             return
 
         if self._is_processing and not text.startswith("/"):
@@ -2264,24 +2270,31 @@ class LibercodeUI(App):
         if agent is None:
             return
 
-        from libercode.providers.registry import (
-            PROVIDER_REGISTRY, detect_available_from_env
-        )
-        env_keys = detect_available_from_env()
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        from libercode.config import LiberConfig
+
+        cfg = LiberConfig.load()
+        configured_keys = set(cfg.providers.keys())
         current_provider_name = agent.provider.name
         current_model = getattr(agent.provider, 'model', '')
         providers = []
-        for name, (cls, env_var) in PROVIDER_REGISTRY.items():
+        for name, (cls, _) in PROVIDER_REGISTRY.items():
             display = getattr(cls, 'display_name', name)
             default_model = getattr(cls, 'default_model', '')
-            if env_var and env_var in env_keys:
-                detail = env_keys[env_var]
-                status = "ready" if name != current_provider_name else "active"
-            elif name == "builtin":
+            if name == "builtin":
+                status = "active" if name == current_provider_name else "ready"
                 detail = "(local)"
+            elif name in configured_keys:
+                raw_key = cfg.providers[name].api_key
+                if raw_key and len(raw_key) > 8:
+                    detail = raw_key[:4] + "…" + raw_key[-4:]
+                elif raw_key:
+                    detail = "****"
+                else:
+                    detail = ""
                 status = "active" if name == current_provider_name else "ready"
             else:
-                detail = env_var or ""
+                detail = ""
                 status = "unconfigured"
             if name == current_provider_name:
                 status = "active"
@@ -2398,6 +2411,12 @@ class LibercodeUI(App):
                 except Exception as e:
                     self.write_error(f"Provider swap failed: {e}")
             self.run_worker(_do_swap())
+
+        try:
+            self.query_one("#prompt-input", Input).blur()
+        except Exception:
+            pass
+        self.push_screen(modal, _on_model_dismiss)
 
     def _finish_provider_switch(self, provider_display_name: str, api_key: str) -> None:
         """Save API key to config, then open model modal."""
