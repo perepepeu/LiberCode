@@ -66,3 +66,24 @@
 - `/scratch` command exposed in TUI for viewing scratch notes.
 - Tool call results (shell, file, git, task) rendered as styled bordered
   panels with icons and colors for instant visual feedback.
+- Multi-file diff viewer with color-coded unified diffs (green for additions,
+  red for deletions) shown before applying file writes, with y/n confirmation.
+- `/search` command with highlighted search term matches across full session history.
+- Smart autocomplete for command arguments: typing `/mode ` shows build/plan/spec/debug,
+  `/model ` shows available models, `/theme ` shows theme names, etc.
+- Token budget progress bar in header showing context window usage with
+  color thresholds (green < 60%, yellow 60-85%, red > 85%).
+- Animated thinking spinner on input border and mode pill during response
+  streaming (pulsing ◐◓◑◒ frames with blink effect).
+- Welcome screen with daily stats: greeting, pending tasks, modified files,
+  active mode, and quick-start hint on first launch each day.
+- Five new themes: Gruvbox, Solarized Dark, One Dark Pro, and Rosé Pine
+  (added to existing Dracula, Tokyonight, Catppuccin, Kanagawa, Nord).
+- `/pr` generates AI-powered PR title/description, pushes branch, and opens
+  GitHub PR via `gh` CLI with confirmation prompt.
+- `/review` sends current git diff to the AI for automated code review
+  covering bugs, quality, and security concerns.
+- `/test` and `/lint` auto-detect project type (Python/Node/Rust/Go/Java)
+  and run appropriate test/linter with AI failure summaries.
+- `/config` displays current configuration with syntax highlighting and
+  supports `key=value` setting with nested key support (e.g. `provider.model`).

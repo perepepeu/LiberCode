@@ -19,7 +19,7 @@ Clears all messages from the chat log. Does not reset history sent to the model.
 Starts a new session: clears the chat AND resets conversation history.
 
 ### /theme
-Cycles through the available themes: dracula → tokyonight → catppuccin → kanagawa → nord → dracula.
+Cycles through the available themes: dracula → tokyonight → catppuccin → kanagawa → nord → gruvbox → solarized → onedark → rosepine → dracula.
 
 ### /quit
 Exits libercode immediately.
@@ -95,3 +95,42 @@ Without arguments: lists all past sessions for the current project with IDs, mod
 dates, and summaries. The current session is marked with ▶.
 With argument: restores the specified session by loading its conversation history
 into the current chat log. Use `/sessions <id>` to resume where you left off.
+
+### /search <term>
+Searches the full conversation history for the given term. Displays matching
+messages with the search term highlighted in yellow. Shows role (user/assistant)
+and timestamp for each match. Example: `/search error handling`
+
+### /pr [branch]
+Creates a GitHub pull request for the current branch. Without arguments, generates
+an AI-powered PR title and description based on the git log, then pushes the branch.
+With argument: uses the given base branch. Requires `gh` CLI to be installed.
+
+### /review
+Sends the current uncommitted git diff to the AI for automated code review.
+The AI analyzes the diff for bugs, code quality issues, security concerns,
+and highlights what looks good.
+
+### /test [command]
+Runs the project's test suite with auto-detected runner:
+- Python → pytest
+- Node → jest
+- Rust → cargo test
+- Go → go test ./...
+
+With argument: runs the custom command instead (e.g. `/test python -m unittest`).
+If failures are detected, the AI summarizes them and suggests fixes.
+
+### /lint [command]
+Runs the project's linter with auto-detected runner:
+- Python → ruff
+- Node → eslint
+- Rust → cargo clippy
+
+With argument: runs the custom command instead (e.g. `/lint mypy .`).
+If issues are found, the AI explains each one and shows corrected code.
+
+### /config [key = value]
+Without arguments: displays the current configuration file with syntax highlighting.
+With key=value: sets a config value (supports nested keys like `provider.model`).
+Example: `/config provider.model = deepseek-coder-v2`
