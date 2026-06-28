@@ -120,6 +120,7 @@ COMMANDS = [
     ("/test",      "Run tests (auto-detected runner)",     "success"),
     ("/lint",      "Run linter (auto-detected runner)",    "warning"),
     ("/config",    "View and edit configuration",          "info"),
+    ("/provider",  "Switch AI provider at runtime",         "primary"),
     ("/quit",      "Exit libercode",                       "error"),
 ]
 
@@ -1615,7 +1616,23 @@ class LibercodeUI(App):
             self.query_one("#prompt-input", Input).value = ""
             return
 
-        # Prevent double-submit while a response is streaming
+        if (
+            self._agent is not None
+            and getattr(self._agent, "_wizard_state", {}).get("step") == 3
+        ):
+            api_key = text.strip()
+            self.query_one("#prompt-input", Input).value = ""
+            state    = self._agent._wizard_state
+            provider = state.get("provider", "")
+            agent    = self._agent
+            tui      = self
+
+            async def _wizard_finish():
+                await agent._tui_wizard_finish(provider, api_key, tui)
+
+            self.run_worker(_wizard_finish(), exclusive=False)
+            return
+
         if self._is_processing and not text.startswith("/"):
             return
 
