@@ -63,22 +63,23 @@ THEMES = {
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 COMMANDS = [
-    ("/help",    "Show all available commands",          "info"),
-    ("/clear",   "Clear current session history",        "warning"),
-    ("/undo",    "Restore last checkpoint",              "warning"),
-    ("/context", "Show current system prompt",           "muted"),
-    ("/export",  "Export session to file",               "success"),
-    ("/import",  "Import memory from file",              "success"),
-    ("/model",   "Switch AI model",                      "accent"),
-    ("/theme",   "Cycle to next theme",                  "accent"),
-    ("/mode",    "Switch mode (build/plan/spec/debug)",  "primary"),
-    ("/tasks",   "List current tasks",                   "muted"),
-    ("/memory",  "Show stored memory entries",           "muted"),
-    ("/git",     "Show git status summary",              "muted"),
-    ("/stash",   "Git stash current changes",            "muted"),
-    ("/pop",     "Git stash pop",                        "muted"),
-    ("/session", "Start a new session",                  "warning"),
-    ("/quit",    "Exit libercode",                       "error"),
+    ("/help",      "Show all available commands",          "info"),
+    ("/clear",     "Clear current session history",        "warning"),
+    ("/undo",      "Restore last checkpoint",              "warning"),
+    ("/context",   "Show current system prompt",           "muted"),
+    ("/export",    "Export session to file",               "success"),
+    ("/import",    "Import memory from file",              "success"),
+    ("/model",     "Switch AI model",                      "accent"),
+    ("/theme",     "Cycle to next theme",                  "accent"),
+    ("/mode",      "Switch mode (build/plan/spec/debug)",  "primary"),
+    ("/tasks",     "List current tasks",                   "muted"),
+    ("/memory",    "Show stored memory entries",           "muted"),
+    ("/git",       "Show git status summary",              "muted"),
+    ("/stash",     "Git stash current changes",            "muted"),
+    ("/pop",       "Git stash pop",                        "muted"),
+    ("/sessions",  "List and restore past sessions",       "info"),
+    ("/session",   "Start a new session",                  "warning"),
+    ("/quit",      "Exit libercode",                       "error"),
 ]
 
 DEFAULT_MODEL = "Qwen2.5-Coder-7B-Instruct"
@@ -161,6 +162,14 @@ class LibercodeUI(App):
     #theme-badge { color: $accent;  width: auto; margin-left: 1; }
     #mode-badge  { color: $secondary; width: auto; margin-left: 1; }
     #spacer      { width: 1fr; }
+    #mode-pill {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        margin-right: 1;
+        content-align: center middle;
+        text-style: bold;
+    }
     #token-counter {
         color: $muted;
         width: auto;
@@ -331,8 +340,9 @@ class LibercodeUI(App):
             yield RichLog(id="chat-log", markup=True, highlight=True, wrap=True)
         with Vertical(id="input-area"):
             with Horizontal(id="prompt-row"):
+                yield Static("", id="mode-pill")
                 yield Static("›", id="prompt-icon")
-                yield Input(placeholder="Type a message...", id="prompt-input")
+                yield Input(placeholder="Type a message or /command…", id="prompt-input")
             with Horizontal(id="hint-bar"):
                 yield Button("^C quit",    id="hint-quit",    classes="hint-btn")
                 yield Button("^T theme",   id="hint-theme",   classes="hint-btn")
@@ -353,6 +363,9 @@ class LibercodeUI(App):
         # Sync mode badge if agent already connected
         if self._agent is not None:
             self._update_mode_badge(self._agent.mode)
+            self._update_mode_pill(self._agent.mode)
+        else:
+            self._update_mode_pill("build")
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
@@ -421,6 +434,9 @@ class LibercodeUI(App):
 
         if self._agent is not None:
             self._update_mode_badge(self._agent.mode)
+            self._update_mode_pill(self._agent.mode)
+        else:
+            self._update_mode_pill("build")
 
     async def _animate_logo(self) -> None:
         t = self.theme_data
@@ -816,66 +832,86 @@ class LibercodeUI(App):
         log.write(line)
 
     def render_user_message(self, text: str) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from datetime import datetime as _dt
+        t   = self.theme_data
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme_data
-        log.write(Text("  " + "╌" * 58, Style(color=t["border"])))
-        header = Text()
-        header.append(f"  {t['user_icon']} you ", Style(color=t["secondary"], bold=True))
-        header.append(f"  {datetime.now().strftime('%H:%M')}", Style(color=t["muted"]))
-        log.write(header)
-        panel = Panel(
-            Text(text, style=Style(color=t["text"])),
-            border_style=Style(color=t["secondary"]),
-            padding=(0, 2),
-            expand=False,
-        )
-        log.write(Align(panel, align="right", width=70))
-        log.write(Text(""))
+        now = _dt.now().strftime("%H:%M:%S")
+        msg = Text()
+        msg.append("\n  › ", Style(color=t["secondary"], bold=True))
+        msg.append(text,     Style(color=t["text"]))
+        msg.append(f"  {now}", Style(color=t["muted"]))
+        msg.append("\n")
+        log.write(msg)
+        log.scroll_end(animate=False)
 
-    def render_ai_header(self) -> None:
+    def render_ai_header(self, model_name: str = None) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from datetime import datetime as _dt
+        t   = self.theme_data
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme_data
-        log.write(Text(""))
+        now = _dt.now().strftime("%H:%M:%S")
+        name = model_name or self.current_model
         header = Text()
-        header.append(f"  {t['ai_icon']} libercode ", Style(color=t["primary"], bold=True))
-        header.append(f"  {self.current_model}", Style(color=t["muted"]))
+        header.append("\n  ◆ ", Style(color=t["primary"], bold=True))
+        header.append(name, Style(color=t["primary"], bold=True))
+        header.append(f"  {now}", Style(color=t["muted"]))
+        header.append("\n")
         log.write(header)
 
     def render_ai_response(self, full_text: str) -> None:
+        """Render complete AI response with Markdown and syntax-highlighted code blocks."""
+        from rich.text import Text
+        from rich.style import Style
+        from rich.syntax import Syntax
+        from rich.markdown import Markdown as RichMarkdown
+        import re as _re
+
         log = self.query_one("#chat-log", RichLog)
-        t = self.theme_data
+        t   = self.theme_data
+
+        CODE_BLOCK = _re.compile(r"```(\w*)\n(.*?)```", _re.DOTALL)
+
         last_end = 0
-        for match in CODE_BLOCK_RE.finditer(full_text):
+        for match in CODE_BLOCK.finditer(full_text):
             start = match.start()
             if start > last_end:
-                segment = full_text[last_end:start]
-                if segment.strip():
-                    log.write(RichMarkdown(segment))
-            lang = match.group(1) or _detect_lang(match.group(2))
-            code = match.group(2).rstrip("\n")
-            lines = code.split("\n")
-            header = Text()
-            header.append("  ╭─ ", Style(color=t["border"]))
-            header.append(
-                f" {lang.upper()} ",
-                Style(color=t["bg"], bold=True, bgcolor=t["accent"]),
-            )
-            header.append(f" ─ {len(lines)} lines", Style(color=t["muted"]))
-            log.write(header)
-            syntax = Syntax(
-                code, lang,
-                theme=t["syntax"],
-                line_numbers=len(lines) > 5,
-                word_wrap=True,
-                background_color=t["bg_input"],
-                indent_guides=True,
-            )
-            log.write(syntax)
-            log.write(Text(f"  ╰{'─' * 62}", Style(color=t["border"])))
+                before = full_text[last_end:start].strip()
+                if before:
+                    try:
+                        log.write(RichMarkdown(before))
+                    except Exception:
+                        log.write(Text(before, Style(color=t["text"])))
+
+            lang = match.group(1).strip() or "text"
+            code = match.group(2)
+            if lang == "text" or lang == "":
+                lang = _detect_lang(code)
+            try:
+                log.write(Syntax(
+                    code,
+                    lang,
+                    theme=t.get("syntax", "dracula"),
+                    line_numbers=True,
+                    word_wrap=True,
+                    background_color=t["bg_panel"],
+                ))
+            except Exception:
+                log.write(Text(code, Style(color=t["accent"])))
+
             last_end = match.end()
-        remaining = full_text[last_end:]
-        if remaining.strip():
-            log.write(RichMarkdown(remaining))
+
+        remaining = full_text[last_end:].strip()
+        if remaining:
+            try:
+                log.write(RichMarkdown(remaining))
+            except Exception:
+                log.write(Text(remaining, Style(color=t["text"])))
+
+        log.write(Text(""))
+        log.scroll_end(animate=False)
 
     def show_theme_changed(self, name: str) -> None:
         log = self.query_one("#chat-log", RichLog)
@@ -940,6 +976,7 @@ class LibercodeUI(App):
         except Exception:
             pass
         self._update_mode_badge(new_mode)
+        self._update_mode_pill(new_mode)
         from rich.text import Text as RText
         from rich.style import Style as RStyle
         t = self.theme_data
@@ -952,6 +989,24 @@ class LibercodeUI(App):
         try:
             badge = self.query_one("#mode-badge", Static)
             badge.update(Text(f" {mode}", style=Style(color=self.theme_data["secondary"])))
+        except Exception:
+            pass
+
+    MODE_PILL_COLORS = {
+        "build": ("#50fa7b", "#1e2a23"),   # accent green on dark green
+        "plan":  ("#f1fa8c", "#2a2a1a"),   # yellow on dark yellow
+        "spec":  ("#8be9fd", "#1a2a2a"),   # cyan on dark cyan
+        "debug": ("#ff5555", "#2a1a1a"),   # red on dark red
+    }
+
+    def _update_mode_pill(self, mode: str) -> None:
+        fg, bg = self.MODE_PILL_COLORS.get(mode, ("#bd93f9", "#1e1a2a"))
+        try:
+            pill = self.query_one("#mode-pill", Static)
+            pill.update(Text(f" {mode.upper()} ", Style(
+                color=fg, bgcolor=bg, bold=True
+            )))
+            pill.styles.background = bg
         except Exception:
             pass
 

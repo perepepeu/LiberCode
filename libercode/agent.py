@@ -784,7 +784,7 @@ class LiberAgent:
         elif cmd == "export":
             await self._tui_cmd_export(tui)
         elif cmd == "import":
-            await self._tui_cmd_import(tui)
+            await self._tui_cmd_import(tui, args)
         elif cmd == "model":
             await self._tui_cmd_model(args, tui)
         elif cmd == "mode":
@@ -802,10 +802,16 @@ class LiberAgent:
         elif cmd == "pop":
             output = await self._run_git_async("stash", "pop")
             self._tui_write_git_output("git stash pop", output, tui)
+        elif cmd == "sessions":
+            await self._tui_cmd_sessions(args, tui)
         else:
             tui.write_error(f"Unknown command: /{cmd}")
 
     async def handle_tui_message(self, user_input: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        import asyncio
+
         self.tui_ui = tui
         self.turn_count += 1
         self.store.history_append(
@@ -815,42 +821,33 @@ class LiberAgent:
         history  = self.store.history_get(self.session_id, limit=30)
         messages = self._build_messages(user_input, history)
         system   = self._system_prompt()
+        t        = tui.theme_data
 
-        # Show thinking indicator immediately — no delay
-        from rich.text import Text
-        from rich.style import Style
-        t = tui.theme_data
+        # Show AI header + thinking indicator immediately
+        tui.render_ai_header(self.provider.name)
         tui.write_output(Text(
-            f"\n  ◐ {self.provider.name}  thinking…\n",
+            "  ◐ thinking…\n",
             Style(color=t["muted"])
         ))
 
         full_response = ""
-
-        # Run the synchronous streaming generator in a thread pool
-        # so the event loop stays free between chunks.
-        # We collect chunks via an async queue bridged from the thread.
-        import asyncio
         queue: asyncio.Queue = asyncio.Queue()
 
         def _stream_worker():
-            """Runs in a thread. Puts chunks into the queue."""
             try:
                 for chunk in self.provider.chat_stream(
                     messages, system=system
                 ):
                     queue.put_nowait(chunk)
             except Exception as e:
-                queue.put_nowait(Exception(e))
+                queue.put_nowait(e)
             finally:
-                queue.put_nowait(None)   # sentinel
+                queue.put_nowait(None)
 
-        # Start the thread
         loop = asyncio.get_event_loop()
         loop.run_in_executor(None, _stream_worker)
 
-        # Consume chunks as they arrive — event loop is free between awaits
-        render_buf = ""
+        # Stream chunks into buffer — event loop free between awaits
         while True:
             chunk = await queue.get()
             if chunk is None:
@@ -859,19 +856,13 @@ class LiberAgent:
                 tui.write_error(f"Provider error: {chunk}")
                 return
             full_response += chunk
-            render_buf    += chunk
-            # Flush every ~80 chars or on newline for smooth streaming feel
-            if "\n" in render_buf or len(render_buf) >= 80:
-                tui.write_output(render_buf)
-                render_buf = ""
-
-        if render_buf:
-            tui.write_output(render_buf)
-        tui.write_output("\n")
 
         if not full_response.strip():
             tui.write_error("Empty response from provider.")
             return
+
+        # Render with full Markdown + syntax highlighting
+        tui.render_ai_response(full_response)
 
         self.store.history_append(
             self.session_id, "assistant", full_response, self.mode
@@ -883,7 +874,7 @@ class LiberAgent:
         tool_result = self._process_response(full_response)
         if tool_result:
             tui.write_output(Text(
-                f"\n  ▸ {tool_result}\n",
+                f"\n  ▸ {tool_result[:300]}\n",
                 Style(color=t["muted"])
             ))
 
@@ -953,21 +944,102 @@ class LiberAgent:
         except Exception as e:
             tui.write_error(f"Export failed: {e}")
 
-    async def _tui_cmd_import(self, tui) -> None:
+    async def _tui_cmd_import(self, tui, args: str = "") -> None:
+        from rich.text import Text
+        from rich.style import Style
+        import json
         t = tui.theme_data
-        tui.write_output(Text("\n  Import\n", Style(color=t["primary"], bold=True)))
+
+        # If no filename given → show instructions + list files
+        if not args:
+            tui.write_output(Text(
+                "\n  Import\n", Style(color=t["primary"], bold=True)
+            ))
+            self._tui_sep(tui)
+            tui.write_output(Text(
+                "  Usage: /import <filename>\n",
+                Style(color=t["muted"])
+            ))
+            exports = sorted(Path(".").glob("libercode_export_*.json"))
+            if exports:
+                tui.write_output(Text(
+                    "  Available exports:", Style(color=t["text"])
+                ))
+                for f in exports:
+                    size = f.stat().st_size // 1024
+                    tui.write_output(Text(
+                        f"    {f.name}  ({size}kb)",
+                        Style(color=t.get("info", t["accent"]))
+                    ))
+            else:
+                tui.write_output(Text(
+                    "  No libercode_export_*.json files found in current directory.\n",
+                    Style(color=t["muted"])
+                ))
+            self._tui_sep(tui)
+            return
+
+        # Filename was given → load and import
+        path = Path(args.strip())
+
+        if not path.exists():
+            path = Path.cwd() / args.strip()
+
+        if not path.exists():
+            tui.write_error(f"File not found: {args.strip()}")
+            return
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            tui.write_error(f"Failed to read file: {e}")
+            return
+
+        imported = {"messages": 0, "memory": 0, "tasks": 0}
+
+        messages = payload.get("messages", [])
+        for msg in messages:
+            role    = msg.get("role", "")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content:
+                self.store.history_append(
+                    self.session_id, role, content,
+                    payload.get("mode", self.mode)
+                )
+                imported["messages"] += 1
+
+        for entry in payload.get("memory", []):
+            key = entry.get("key", "")
+            val = entry.get("value", "")
+            cat = entry.get("category", "general")
+            if key:
+                self.memory.remember(key, val, cat)
+                imported["memory"] += 1
+
+        for task in payload.get("tasks", []):
+            title = task.get("title", "") or task.get("text", "")
+            desc  = task.get("description", "")
+            if title:
+                self.tasks.create(title, desc, mode=self.mode)
+                imported["tasks"] += 1
+
+        if "mode" in payload and payload["mode"] in self.VALID_MODES:
+            self.mode = payload["mode"]
+            self.store.session_update_mode(self.session_id, self.mode)
+            tui._update_mode_pill(self.mode)
+
+        tui.write_output(Text(
+            f"\n  ✓ Import complete from {path.name}\n",
+            Style(color=t["success"], bold=True)
+        ))
         self._tui_sep(tui)
         tui.write_output(Text(
-            "  Run: libercode --import libercode_export_<timestamp>.json\n",
-            Style(color=t["muted"])
+            f"  Messages: {imported['messages']}\n"
+            f"  Memory:   {imported['memory']}\n"
+            f"  Tasks:    {imported['tasks']}\n",
+            Style(color=t["text"])
         ))
-        exports = sorted(Path(".").glob("libercode_export_*.json"))
-        if exports:
-            tui.write_output(Text("  Available exports:", Style(color=t["text"])))
-            for f in exports:
-                tui.write_output(Text(f"    {f.name}", Style(color=t.get("info", t["accent"]))))
         self._tui_sep(tui)
-        tui.write_output("\n")
 
     async def _tui_cmd_model(self, args: str, tui) -> None:
         if not args:
@@ -1045,6 +1117,100 @@ class LiberAgent:
                 tui.write_output(line)
         self._tui_sep(tui)
         tui.write_output("\n")
+
+    async def _tui_cmd_sessions(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        # If an ID was passed → restore that session
+        if args.strip().isdigit():
+            await self._tui_restore_session(int(args.strip()), tui)
+            return
+
+        # Otherwise → list all sessions for this project
+        try:
+            sessions = self.store.session_list(str(Path.cwd().resolve()))
+        except Exception as e:
+            tui.write_error(f"Could not load sessions: {e}")
+            return
+
+        tui.write_output(Text(
+            "\n  Sessions\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        if not sessions:
+            tui.write_output(Text(
+                "  No past sessions found.\n", Style(color=t["muted"])
+            ))
+        else:
+            for s in sessions[:20]:
+                sid     = s.get("id", "?")
+                mode    = s.get("mode", "?")
+                started = str(s.get("started_at", ""))[:16]
+                ended   = str(s.get("ended_at", ""))[:16] or "active"
+                summary = s.get("summary", "")[:50]
+                is_cur  = (sid == self.session_id)
+
+                line = Text()
+                line.append(
+                    "  ▶ " if is_cur else "    ",
+                    Style(color=t["accent"], bold=True)
+                )
+                line.append(f"#{sid}", Style(
+                    color=t["accent"] if is_cur else t["primary"],
+                    bold=is_cur
+                ))
+                line.append(f"  {mode:<6}", Style(color=t["secondary"]))
+                line.append(f"  {started}", Style(color=t["muted"]))
+                line.append(f"  → {ended}", Style(color=t["muted"]))
+                if summary:
+                    line.append(f"  {summary}", Style(color=t["text"]))
+                tui.write_output(line)
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Use /sessions <id> to restore a session.\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _tui_restore_session(self, session_id: int, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        try:
+            history = self.store.history_get(session_id, limit=50)
+        except Exception as e:
+            tui.write_error(f"Could not load session #{session_id}: {e}")
+            return
+
+        if not history:
+            tui.write_error(f"Session #{session_id} has no messages.")
+            return
+
+        self.session_id = session_id
+
+        tui.write_output(Text(
+            f"\n  ◈ Restored session #{session_id}\n",
+            Style(color=t["accent"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        for msg in history[-20:]:
+            role    = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                tui.render_user_message(content[:300])
+            elif role == "assistant":
+                tui.render_ai_response(content[:1000])
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            f"  Session #{session_id} loaded. Continue where you left off.\n",
+            Style(color=t["muted"])
+        ))
 
     async def _run_git_async(self, *args: str) -> str:
         proc = await asyncio.create_subprocess_exec(
