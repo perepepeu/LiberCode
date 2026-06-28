@@ -53,6 +53,13 @@ class GitHelper:
     def branch(self) -> dict:
         return self._run(["branch", "--show-current"])
 
+    def current_branch(self) -> str:
+        try:
+            result = self._run(["rev-parse", "--abbrev-ref", "HEAD"])
+            return result.get("stdout", "").strip() or "HEAD"
+        except Exception:
+            return "HEAD"
+
     def branches(self) -> dict:
         return self._run(["branch", "-a"])
 

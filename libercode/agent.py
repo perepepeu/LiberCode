@@ -804,6 +804,12 @@ class LiberAgent:
             self._tui_write_git_output("git stash pop", output, tui)
         elif cmd == "sessions":
             await self._tui_cmd_sessions(args, tui)
+        elif cmd == "checkpoint":
+            await self._tui_cmd_checkpoint(args, tui)
+        elif cmd == "restore":
+            await self._tui_cmd_restore(args, tui)
+        elif cmd == "scratch":
+            await self._tui_cmd_scratch(tui)
         else:
             tui.write_error(f"Unknown command: /{cmd}")
 
@@ -871,12 +877,39 @@ class LiberAgent:
             self._enc.encode(user_input + full_response)
         )
 
-        tool_result = self._process_response(full_response)
-        if tool_result:
-            tui.write_output(Text(
-                f"\n  ▸ {tool_result[:300]}\n",
-                Style(color=t["muted"])
-            ))
+        # Detect and render tool calls with visual panels
+        import re as _re
+        tool_pattern = _re.compile(
+            r"<tool\s+name=\"([^\"]+)\"[^>]*>(.*?)</tool>",
+            _re.DOTALL
+        )
+        tool_matches = list(tool_pattern.finditer(full_response))
+        if tool_matches:
+            for match in tool_matches:
+                tool_name = match.group(1).strip()
+                tool_body = match.group(2).strip()
+                result = self._dispatch_tool(tool_name, tool_body)
+                if result:
+                    tui._render_tool_result(tool_name, result)
+        else:
+            tool_result = self._process_response(full_response)
+            if tool_result:
+                tool_name = "shell"
+                if tool_result.startswith("[File]"):
+                    tool_name = "file:write"
+                elif tool_result.startswith("[Task]"):
+                    tool_name = "task:create"
+                elif tool_result.startswith("[Checkpoint]"):
+                    tool_name = "checkpoint"
+                elif tool_result.startswith("[Memory]"):
+                    tool_name = "memory"
+                elif tool_result.startswith("[Scratch]"):
+                    tool_name = "scratch"
+                elif tool_result.startswith("[Sub-agent"):
+                    tool_name = "agent:spawn"
+                tui._render_tool_result(tool_name, tool_result)
+
+        tui.refresh_status_bar()
 
     async def handle_picker_selected(self, kind: str, value: str, tui) -> None:
         if kind == "model":
@@ -887,6 +920,7 @@ class LiberAgent:
             self.mode = value
             self.store.session_update_mode(self.session_id, value)
             tui.write_info(f"Mode switched to {value}")
+        tui.refresh_status_bar()
 
     def _tui_write(self, tui, content) -> None:
         tui.write_output(content)
@@ -1069,6 +1103,7 @@ class LiberAgent:
             self.mode = args
             self.store.session_update_mode(self.session_id, args)
             tui.write_info(f"Mode switched to {args}")
+            tui.refresh_status_bar()
         else:
             tui.write_error(
                 f"Invalid mode '{args}'. "
@@ -1096,27 +1131,121 @@ class LiberAgent:
                 ))
         self._tui_sep(tui)
         tui.write_output("\n")
+        tui.refresh_status_bar()
 
-    async def _tui_cmd_memory(self, tui) -> None:
-        t = tui.theme_data
-        tui.write_output(Text("\n  Memory\n", Style(color=t["primary"], bold=True)))
-        self._tui_sep(tui)
-        items = self.memory.all()
-        if not items:
+    async def _tui_cmd_checkpoint(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t       = tui.theme_data
+        summary = args.strip() if args.strip() else f"manual checkpoint — turn {self.turn_count}"
+        try:
+            cid = self.checkpointer.save(summary=summary)
             tui.write_output(Text(
-                "  No memory entries stored yet.\n",
+                f"\n  ✓ Checkpoint saved: {cid}\n"
+                f"  Summary: {summary}\n",
+                Style(color=t["success"], bold=True)
+            ))
+        except Exception as e:
+            tui.write_error(f"Checkpoint failed: {e}")
+
+    async def _tui_cmd_restore(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+        try:
+            cps = self.checkpointer.list()
+        except Exception as e:
+            tui.write_error(f"Could not load checkpoints: {e}")
+            return
+        if not args.strip():
+            tui.write_output(Text(
+                "\n  Checkpoints\n", Style(color=t["primary"], bold=True)
+            ))
+            self._tui_sep(tui)
+            if not cps:
+                tui.write_output(Text(
+                    "  No checkpoints saved yet.\n",
+                    Style(color=t["muted"])
+                ))
+            else:
+                for cp in cps[:15]:
+                    cid     = cp.get("id", "?")
+                    created = str(cp.get("created_at", ""))[:16]
+                    summ    = cp.get("summary", "")[:60]
+                    nfiles  = len(cp.get("snapshot", {}).get("files", {}))
+                    line    = Text()
+                    line.append(f"  {cid}", Style(color=t["accent"], bold=True))
+                    line.append(f"  {created}", Style(color=t["muted"]))
+                    line.append(f"  {nfiles} files", Style(color=t["text"]))
+                    line.append(f"  {summ}", Style(color=t["muted"]))
+                    tui.write_output(line)
+            self._tui_sep(tui)
+            tui.write_output(Text(
+                "  Use /restore <checkpoint_id> to restore files.\n",
                 Style(color=t["muted"])
             ))
+            return
+        target_id = args.strip()
+        cp = next((c for c in cps if str(c.get("id", "")) == target_id), None)
+        if cp is None:
+            tui.write_error(f"Checkpoint '{target_id}' not found.")
+            return
+        snapshot = cp.get("snapshot", {})
+        files    = snapshot.get("files", {})
+        if not files:
+            tui.write_error(f"Checkpoint {target_id} has no file snapshot.")
+            return
+        restored = 0
+        errors   = []
+        for rel_path, content in files.items():
+            try:
+                full_path = Path(self.shell.workdir) / rel_path
+                if not full_path.resolve().is_relative_to(
+                    Path(self.shell.workdir).resolve()
+                ):
+                    errors.append(f"Blocked: {rel_path}")
+                    continue
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content, encoding="utf-8")
+                restored += 1
+            except Exception as e:
+                errors.append(f"{rel_path}: {e}")
+        tui.write_output(Text(
+            f"\n  ✓ Restored {restored} files from checkpoint {target_id}\n",
+            Style(color=t["success"], bold=True)
+        ))
+        if errors:
+            for err in errors:
+                tui.write_error(err)
+
+    async def _tui_cmd_scratch(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+        tui.write_output(Text(
+            "\n  Scratch Notes\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+        try:
+            notes = self.scratch.list()
+        except Exception as e:
+            tui.write_error(f"Could not load notes: {e}")
+            return
+        if not notes:
+            tui.write_output(Text(
+                "  No scratch notes yet.\n", Style(color=t["muted"])
+            ))
         else:
-            for entry in items[:20]:
-                key = entry.get("key", "")
-                val = entry.get("value", "")[:100]
-                line = Text()
-                line.append(f"  {key}: ", Style(color=t["accent"], bold=True))
-                line.append(val,          Style(color=t["text"]))
+            for n in notes[:20]:
+                nid     = n.get("id", "?")
+                title   = n.get("title", "")
+                content = n.get("content", "")[:80]
+                line    = Text()
+                line.append(f"  #{nid} ", Style(color=t["accent"], bold=True))
+                line.append(f"{title}  ", Style(color=t["text"], bold=True))
+                line.append(content,      Style(color=t["muted"]))
                 tui.write_output(line)
         self._tui_sep(tui)
-        tui.write_output("\n")
 
     async def _tui_cmd_sessions(self, args: str, tui) -> None:
         from rich.text import Text
