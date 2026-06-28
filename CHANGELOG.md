@@ -37,3 +37,15 @@
   `width: 1` to force a thin 1-cell-wide scrollbar matching theme border color.
 - Slash commands now work in TUI mode: replaced broken `self.ui.query_one()`
   calls with thread-safe `tui.write_output()` pattern via `run_worker()`.
+
+### Fixed
+- Eliminate chat response delay by streaming provider chunks in a thread pool
+  via asyncio.Queue, keeping the event loop responsive between chunks.
+- Command palette no longer steals keyboard focus from the Input field —
+  OptionList is purely visual, navigation handled in on_key() with event.stop().
+- Picker (model/mode selection) also keeps focus on Input, with keyboard nav
+  handled in on_key().
+
+### Added
+- Tab key cycles agent mode (build → plan → spec → debug → build) with
+  a mode badge in the header bar and a "⇄ Mode → ..." message in chat log.
