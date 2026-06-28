@@ -221,9 +221,9 @@ class ProviderModal(ModalScreen):
     """Centered floating provider picker with live search."""
 
     BINDINGS = [
-        Binding("escape", "dismiss_none", "Close"),
-        Binding("up",     "cursor_up",   "Up",   show=False),
-        Binding("down",   "cursor_down", "Down", show=False),
+        Binding("escape", "dismiss_none", "Close",  priority=True),
+        Binding("up",     "cursor_up",   "Up",   show=False, priority=True),
+        Binding("down",   "cursor_down", "Down", show=False, priority=True),
         Binding("enter",  "confirm",     "Select"),
     ]
 
@@ -403,9 +403,9 @@ class ModelModal(ModalScreen):
     """Centered floating model picker with live search and lazy load."""
 
     BINDINGS = [
-        Binding("escape", "dismiss_none", "Close"),
-        Binding("up",     "cursor_up",    "Up",   show=False),
-        Binding("down",   "cursor_down",  "Down", show=False),
+        Binding("escape", "dismiss_none", "Close",  priority=True),
+        Binding("up",     "cursor_up",    "Up",   show=False, priority=True),
+        Binding("down",   "cursor_down",  "Down", show=False, priority=True),
         Binding("enter",  "confirm",      "Select"),
     ]
 
