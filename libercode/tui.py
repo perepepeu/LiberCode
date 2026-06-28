@@ -1,6 +1,7 @@
 import asyncio
 import re
 from datetime import datetime
+from pathlib import Path
 
 from rich.align import Align
 from rich.markdown import Markdown as RichMarkdown
@@ -1153,10 +1154,30 @@ class LibercodeUI(App):
     def on_key(self, event) -> None:
         key = event.key
 
-        # ── When a modal is active, don't intercept any keys ──
+        # ── Modal screens — intercept keys before Input steals them ──
+        active_modal = None
         for screen in self.screen_stack:
-            if isinstance(screen, (ProviderModal, ModelModal)):
-                return
+            if isinstance(screen, ProviderModal):
+                active_modal = screen
+                break
+            if isinstance(screen, ModelModal):
+                active_modal = screen
+                break
+
+        if active_modal is not None:
+            if key == "up":
+                active_modal.action_cursor_up()
+                event.stop()
+            elif key == "down":
+                active_modal.action_cursor_down()
+                event.stop()
+            elif key == "enter":
+                active_modal.action_confirm()
+                event.stop()
+            elif key == "escape":
+                active_modal.action_dismiss_none()
+                event.stop()
+            return
 
         # ── Picker (model/mode overlay) ──
         try:
