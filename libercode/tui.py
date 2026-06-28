@@ -2059,6 +2059,10 @@ class LibercodeUI(App):
             if result is not None:
                 self._switch_provider_then_model(result)
 
+        try:
+            self.query_one("#prompt-input", Input).blur()
+        except Exception:
+            pass
         self.push_screen(
             ProviderModal(providers, current_provider_name),
             _on_dismiss
@@ -2121,6 +2125,10 @@ class LibercodeUI(App):
                     self.write_error(f"Provider swap failed: {e}")
             self.run_worker(_do_swap())
 
+        try:
+            self.query_one("#prompt-input", Input).blur()
+        except Exception:
+            pass
         self.push_screen(modal, _on_model_dismiss)
 
     def open_model_modal(self) -> None:
@@ -2174,6 +2182,10 @@ class LibercodeUI(App):
                     self.write_error(f"Model switch failed: {e}")
             self.run_worker(_do_set())
 
+        try:
+            self.query_one("#prompt-input", Input).blur()
+        except Exception:
+            pass
         self.push_screen(modal, _on_dismiss)
 
     def on_picker_selected_event(self, event: PickerSelectedEvent) -> None:
