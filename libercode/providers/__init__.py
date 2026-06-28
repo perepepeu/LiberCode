@@ -9,6 +9,11 @@ from libercode.providers.openrouter_provider import OpenRouterProvider
 from libercode.providers.ollama_provider  import OllamaProvider
 from libercode.providers.deepseek_provider import DeepSeekProvider
 from libercode.providers.together_provider import TogetherProvider
+from libercode.providers.nvidia_provider  import NvidiaProvider
+from libercode.providers.mistral_provider import MistralProvider
+from libercode.providers.cohere_provider  import CohereProvider
+from libercode.providers.xai_provider     import XAIProvider
+from libercode.providers.cerebras_provider import CerebrasProvider
 from libercode.providers.registry         import (
     PROVIDER_REGISTRY,
     available_providers,
@@ -22,6 +27,8 @@ __all__ = [
     "OpenAIProvider", "AnthropicProvider", "GoogleProvider",
     "GroqProvider", "OpenRouterProvider", "OllamaProvider",
     "DeepSeekProvider", "TogetherProvider",
+    "NvidiaProvider", "MistralProvider", "CohereProvider",
+    "XAIProvider", "CerebrasProvider",
     "PROVIDER_REGISTRY", "available_providers",
     "build_provider", "detect_available_from_env",
 ]

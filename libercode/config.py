@@ -36,6 +36,46 @@ class ProviderConfig:
             api_base="https://api.anthropic.com/v1",
         )
 
+    @classmethod
+    def nvidia_defaults(cls):
+        return cls(
+            name="nvidia",
+            model="nvidia/llama-3.1-nemotron-ultra-253b-v1",
+            api_base="https://integrate.api.nvidia.com/v1",
+        )
+
+    @classmethod
+    def mistral_defaults(cls):
+        return cls(
+            name="mistral",
+            model="mistral-large-latest",
+            api_base="https://api.mistral.ai/v1",
+        )
+
+    @classmethod
+    def cohere_defaults(cls):
+        return cls(
+            name="cohere",
+            model="command-r-plus",
+            api_base="",
+        )
+
+    @classmethod
+    def xai_defaults(cls):
+        return cls(
+            name="xai",
+            model="grok-3",
+            api_base="https://api.x.ai/v1",
+        )
+
+    @classmethod
+    def cerebras_defaults(cls):
+        return cls(
+            name="cerebras",
+            model="llama-4-scout-17b-16e-instruct",
+            api_base="https://api.cerebras.ai/v1",
+        )
+
 
 @dataclass
 class LiberConfig:
@@ -171,7 +211,11 @@ def first_run_wizard():
     )
 
     provider_choice = Prompt.ask(
-        "Choose a provider", choices=["builtin", "custom"], default="builtin"
+        "Choose a provider",
+        choices=["builtin", "openai", "anthropic", "google", "groq",
+                 "nvidia", "mistral", "cohere", "xai", "cerebras",
+                 "deepseek", "together", "openrouter", "ollama", "custom"],
+        default="builtin",
     )
 
     cfg = LiberConfig()
@@ -186,18 +230,22 @@ def first_run_wizard():
             "  For production, set up a custom provider later with `libercode config`"
         )
     else:
-        ptype = Prompt.ask(
-            "Provider type", choices=["openai", "anthropic", "other"], default="openai"
-        )
-        if ptype == "openai":
-            cfg.provider = ProviderConfig.openai_defaults()
-        elif ptype == "anthropic":
-            cfg.provider = ProviderConfig.anthropic_defaults()
+        defaults_map = {
+            "openai":     ProviderConfig.openai_defaults,
+            "anthropic":  ProviderConfig.anthropic_defaults,
+            "nvidia":     ProviderConfig.nvidia_defaults,
+            "mistral":    ProviderConfig.mistral_defaults,
+            "cohere":     ProviderConfig.cohere_defaults,
+            "xai":        ProviderConfig.xai_defaults,
+            "cerebras":   ProviderConfig.cerebras_defaults,
+        }
+        if provider_choice in defaults_map:
+            cfg.provider = defaults_map[provider_choice]()
         else:
-            cfg.provider = ProviderConfig(name="other")
+            cfg.provider = ProviderConfig(name=provider_choice)
 
         cfg.provider.api_key = Prompt.ask("API key", password=True)
-        if ptype == "other":
+        if provider_choice == "custom":
             cfg.provider.api_base = Prompt.ask("API base URL")
             cfg.provider.model = Prompt.ask("Model name")
 

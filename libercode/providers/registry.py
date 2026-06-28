@@ -13,6 +13,11 @@ from libercode.providers.openrouter_provider import OpenRouterProvider
 from libercode.providers.ollama_provider    import OllamaProvider
 from libercode.providers.deepseek_provider  import DeepSeekProvider
 from libercode.providers.together_provider  import TogetherProvider
+from libercode.providers.nvidia_provider    import NvidiaProvider
+from libercode.providers.mistral_provider   import MistralProvider
+from libercode.providers.cohere_provider    import CohereProvider
+from libercode.providers.xai_provider       import XAIProvider
+from libercode.providers.cerebras_provider  import CerebrasProvider
 from libercode.providers.builtin            import BuiltinProvider
 from libercode.providers.custom             import CustomProvider
 
@@ -25,6 +30,11 @@ PROVIDER_REGISTRY: dict[str, tuple[Type[BaseProvider], str]] = {
     "ollama":     (OllamaProvider,     ""),
     "deepseek":   (DeepSeekProvider,   "DEEPSEEK_API_KEY"),
     "together":   (TogetherProvider,   "TOGETHER_API_KEY"),
+    "nvidia":     (NvidiaProvider,     "NVIDIA_API_KEY"),
+    "mistral":    (MistralProvider,    "MISTRAL_API_KEY"),
+    "cohere":     (CohereProvider,     "COHERE_API_KEY"),
+    "xai":        (XAIProvider,        "XAI_API_KEY"),
+    "cerebras":   (CerebrasProvider,   "CEREBRAS_API_KEY"),
     "builtin":    (BuiltinProvider,    ""),
     "custom":     (CustomProvider,     ""),
 }
