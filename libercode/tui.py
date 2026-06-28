@@ -684,6 +684,19 @@ class APIKeyModal(ModalScreen):
         text-align: center;
         margin-top: 1;
     }
+    #api-key-btn-row {
+        width: 1fr;
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+        gap: 2;
+    }
+    #api-key-confirm {
+        min-width: 12;
+    }
+    #api-key-cancel {
+        min-width: 12;
+    }
     """
 
     def __init__(self, provider_name: str) -> None:
@@ -705,6 +718,9 @@ class APIKeyModal(ModalScreen):
                 password=True,
                 id="api-key-input"
             )
+            with Horizontal(id="api-key-btn-row"):
+                yield Button("  Confirm  ", id="api-key-confirm", variant="primary")
+                yield Button("  Cancel   ", id="api-key-cancel")
             yield Static(
                 "  Enter submit    Esc cancel",
                 id="api-key-footer"
@@ -737,6 +753,15 @@ class APIKeyModal(ModalScreen):
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_confirm()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "api-key-confirm":
+            self.action_confirm()
+        elif event.button.id == "api-key-cancel":
+            self.action_dismiss_none()
 
     def on_key(self, event) -> None:
         key = event.key

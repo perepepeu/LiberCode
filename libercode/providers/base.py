@@ -19,7 +19,7 @@ def request_with_retry(url: str, payload: dict, headers: dict = None, stream: bo
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.post(
-                url, payload=payload, headers=headers or {}, stream=stream, timeout=120
+                url, json=payload, headers=headers or {}, stream=stream, timeout=120
             )
             if resp.status_code == 429:
                 wait = BACKOFF_BASE ** attempt
