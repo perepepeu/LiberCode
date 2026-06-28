@@ -40,6 +40,8 @@ class ProviderConfig:
 @dataclass
 class LiberConfig:
     provider: ProviderConfig = field(default_factory=ProviderConfig.builtin_defaults)
+    providers: dict[str, ProviderConfig] = field(default_factory=dict)
+    active_provider: str = "builtin"
     mode: str = DEFAULT_MODE
     data_dir: str = str(DATA_DIR)
     max_turns: int = 30
@@ -103,6 +105,54 @@ class LiberConfig:
         else:
             with open(GLOBAL_CONFIG_PATH, "w") as f:
                 yaml.dump(self.to_dict(), f, default_flow_style=False)
+
+    def save_provider_config(
+        self,
+        provider_name: str,
+        api_key:       str  = "",
+        model:         str  = "",
+        api_base:      str  = "",
+        set_active:    bool = True,
+    ) -> None:
+        import tempfile, shutil
+
+        config_path = Path(
+            self.config_file
+            if hasattr(self, "config_file")
+            else Path.home() / ".config" / "libercode" / "config.toml"
+        )
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(config_path, "rb") as f:
+                data = __import__("tomllib").load(f)
+        except Exception:
+            data = {}
+
+        data.setdefault("providers", {})
+        data["providers"].setdefault(provider_name, {})
+        if api_key:
+            data["providers"][provider_name]["api_key"] = api_key
+        if model:
+            data["providers"][provider_name]["model"] = model
+        if api_base:
+            data["providers"][provider_name]["api_base"] = api_base
+        if set_active:
+            data.setdefault("provider", {})
+            data["provider"]["name"] = provider_name
+            if model:
+                data["provider"]["model"] = model
+
+        tmp = config_path.with_suffix(".tmp")
+        try:
+            import tomli_w
+            with open(tmp, "wb") as f:
+                tomli_w.dump(data, f)
+            shutil.move(str(tmp), str(config_path))
+        except Exception as e:
+            if tmp.exists():
+                tmp.unlink()
+            raise e
 
 
 def first_run_wizard():
