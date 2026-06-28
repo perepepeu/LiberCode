@@ -835,7 +835,10 @@ class LiberAgent:
         elif cmd == "import":
             await self._tui_cmd_import(tui, args)
         elif cmd == "model":
-            await self._tui_cmd_model(args, tui)
+            if not args.strip():
+                tui.open_model_modal()
+            else:
+                await self._tui_cmd_model(args, tui)
         elif cmd == "mode":
             await self._tui_cmd_mode(args, tui)
         elif cmd == "tasks":
@@ -872,7 +875,13 @@ class LiberAgent:
         elif cmd == "config":
             await self._tui_cmd_config(args, tui)
         elif cmd == "provider":
-            await self._tui_cmd_provider(args, tui)
+            parts = args.strip().split(maxsplit=1)
+            if not args.strip() or args.strip() in ("list", "setup"):
+                tui.open_provider_modal()
+            else:
+                name  = parts[0].lower()
+                model = parts[1].strip() if len(parts) > 1 else ""
+                await self._tui_provider_direct_switch(name, model, tui)
         else:
             tui.write_error(f"Unknown command: /{cmd}")
 
@@ -1895,6 +1904,37 @@ class LiberAgent:
         parts = args.strip().split(maxsplit=1)
         name  = parts[0].lower()
         model = parts[1].strip() if len(parts) > 1 else ""
+
+        if name not in PROVIDER_REGISTRY:
+            tui.write_error(
+                f"Unknown provider '{name}'. "
+                f"Available: {', '.join(PROVIDER_REGISTRY)}"
+            )
+            return
+
+        old_provider = self.provider
+        try:
+            self.swap_provider(name=name, model=model)
+            tui.write_output(Text(
+                f"\n  ✓ Provider → {name}"
+                f"  model: {self.provider.model}\n",
+                Style(color=t["success"], bold=True)
+            ))
+            tui.update_model_badge_from_thread(
+                f"{name} / {self.provider.model}"
+            )
+            tui.refresh_status_bar()
+        except ProviderError as e:
+            self.provider = old_provider
+            tui.write_error(f"Provider switch failed: {e}")
+
+    async def _tui_provider_direct_switch(self, name: str, model: str, tui) -> None:
+        """Switch provider directly by name, optionally setting model."""
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        from libercode.providers.base import ProviderError
+        t = tui.theme_data
 
         if name not in PROVIDER_REGISTRY:
             tui.write_error(

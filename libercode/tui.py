@@ -14,6 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.message import Message
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import Button, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
@@ -214,6 +215,326 @@ class PickerSelectedEvent(Message):
         self.kind = kind
         self.value = value
         super().__init__()
+
+
+class ProviderModal(ModalScreen):
+    """Centered floating provider picker with live search."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Close"),
+        Binding("up",     "cursor_up",   "Up",   show=False),
+        Binding("down",   "cursor_down", "Down", show=False),
+        Binding("enter",  "confirm",     "Select"),
+    ]
+
+    CSS = """
+    ProviderModal {
+        align: center middle;
+    }
+    #provider-modal-container {
+        width: 62;
+        height: auto;
+        max-height: 36;
+        background: #1e1f29;
+        border: round #bd93f9;
+        padding: 0;
+    }
+    #provider-modal-title {
+        width: 1fr;
+        content-align: center middle;
+        background: #bd93f9;
+        color: #282a36;
+        text-style: bold;
+        height: 1;
+        padding: 0 2;
+    }
+    #modal-search {
+        width: 1fr;
+        border: none;
+        border-bottom: solid #6272a4;
+        background: #21222c;
+        color: #f8f8f2;
+        padding: 0 2;
+        height: 3;
+    }
+    #modal-search:focus {
+        border-bottom: solid #50fa7b;
+    }
+    #provider-list {
+        width: 1fr;
+        height: auto;
+        max-height: 24;
+        background: #1e1f29;
+    }
+    #provider-modal-footer {
+        width: 1fr;
+        height: 1;
+        background: #282a36;
+        color: #6272a4;
+        content-align: center middle;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(self, providers: list[dict], current: str) -> None:
+        """
+        providers: list of dicts with keys:
+            name, default_model, status ("active"|"ready"|"unconfigured"),
+            detail (masked key or env var name or "local")
+        current: name of the active provider
+        """
+        super().__init__()
+        self._all_providers = providers
+        self._filtered = list(providers)
+        self._current = current
+        self._cursor = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="provider-modal-container"):
+            yield Static("  ⚡  Switch Provider", id="provider-modal-title")
+            yield Input(placeholder="  Search providers…", id="modal-search")
+            yield OptionList(id="provider-list")
+            yield Static(
+                "↑↓ navigate    Enter select    Esc close",
+                id="provider-modal-footer"
+            )
+
+    def on_mount(self) -> None:
+        self._rebuild_list()
+        self.query_one("#modal-search", Input).focus()
+
+    def _rebuild_list(self, query: str = "") -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from textual.widgets._option_list import Option
+
+        q = query.lower().strip()
+        self._filtered = [
+            p for p in self._all_providers
+            if not q
+            or q in p["name"].lower()
+            or q in p["default_model"].lower()
+        ]
+
+        ol = self.query_one("#provider-list", OptionList)
+        ol.clear_options()
+
+        for i, p in enumerate(self._filtered):
+            name    = p["name"]
+            model   = p["default_model"]
+            status  = p["status"]
+            detail  = p["detail"]
+
+            if status == "active":
+                icon  = "▶"
+                color = "accent"
+            elif status == "ready":
+                icon  = "✓"
+                color = "success"
+            else:
+                icon  = "○"
+                color = "muted"
+
+            line = Text()
+            line.append(f"  {icon} ", Style(bold=True))
+            line.append(f"{name:<12}", Style(bold=(status == "active")))
+            line.append(f"  {model:<32}", Style(dim=True))
+            line.append(f"  {detail}", Style(dim=True))
+
+            ol.add_option(Option(line, id=name))
+
+        self._cursor = min(self._cursor, max(0, len(self._filtered) - 1))
+        if self._filtered:
+            try:
+                ol.highlighted = self._cursor
+            except Exception:
+                pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "modal-search":
+            self._cursor = 0
+            self._rebuild_list(event.value)
+
+    def on_option_list_option_highlighted(self, event) -> None:
+        self._cursor = event.option_index
+
+    def action_cursor_up(self) -> None:
+        if self._cursor > 0:
+            self._cursor -= 1
+            self.query_one("#provider-list", OptionList).highlighted = self._cursor
+
+    def action_cursor_down(self) -> None:
+        if self._cursor < len(self._filtered) - 1:
+            self._cursor += 1
+            self.query_one("#provider-list", OptionList).highlighted = self._cursor
+
+    def action_confirm(self) -> None:
+        if self._filtered:
+            selected = self._filtered[self._cursor]
+            self.dismiss(selected["name"])
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+    def on_option_list_option_selected(self, event) -> None:
+        if event.option.id:
+            self.dismiss(event.option.id)
+
+
+class ModelModal(ModalScreen):
+    """Centered floating model picker with live search and lazy load."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Close"),
+        Binding("up",     "cursor_up",    "Up",   show=False),
+        Binding("down",   "cursor_down",  "Down", show=False),
+        Binding("enter",  "confirm",      "Select"),
+    ]
+
+    CSS = """
+    ModelModal {
+        align: center middle;
+    }
+    #provider-modal-container {
+        width: 62;
+        height: auto;
+        max-height: 36;
+        background: #1e1f29;
+        border: round #bd93f9;
+        padding: 0;
+    }
+    #provider-modal-title {
+        width: 1fr;
+        content-align: center middle;
+        background: #bd93f9;
+        color: #282a36;
+        text-style: bold;
+        height: 1;
+        padding: 0 2;
+    }
+    #modal-search, #model-search {
+        width: 1fr;
+        border: none;
+        border-bottom: solid #6272a4;
+        background: #21222c;
+        color: #f8f8f2;
+        padding: 0 2;
+        height: 3;
+    }
+    #modal-search:focus, #model-search:focus {
+        border-bottom: solid #50fa7b;
+    }
+    #model-list {
+        width: 1fr;
+        height: auto;
+        max-height: 24;
+        background: #1e1f29;
+    }
+    #provider-modal-footer {
+        width: 1fr;
+        height: 1;
+        background: #282a36;
+        color: #6272a4;
+        content-align: center middle;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(
+        self,
+        provider_name: str,
+        current_model: str,
+        models: list[str],
+    ) -> None:
+        super().__init__()
+        self._provider_name = provider_name
+        self._current_model = current_model
+        self._all_models = list(models)
+        self._filtered = list(models)
+        self._cursor = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="provider-modal-container"):
+            yield Static(
+                f"  ⚡  Select Model  ·  {self._provider_name}",
+                id="provider-modal-title"
+            )
+            yield Input(placeholder="  Search models…", id="model-search")
+            yield OptionList(id="model-list")
+            yield Static(
+                "↑↓ navigate    Enter select    Esc close",
+                id="provider-modal-footer"
+            )
+
+    def on_mount(self) -> None:
+        self._rebuild_list()
+        self.query_one("#model-search", Input).focus()
+
+    def set_models(self, models: list[str]) -> None:
+        self._all_models = models
+        query = ""
+        try:
+            query = self.query_one("#model-search", Input).value
+        except Exception:
+            pass
+        self._rebuild_list(query)
+
+    def _rebuild_list(self, query: str = "") -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from textual.widgets._option_list import Option
+
+        q = query.lower().strip()
+        self._filtered = [
+            m for m in self._all_models
+            if not q or q in m.lower()
+        ]
+
+        ol = self.query_one("#model-list", OptionList)
+        ol.clear_options()
+
+        for m in self._filtered:
+            is_current = (m == self._current_model)
+            line = Text()
+            line.append("  ▶ " if is_current else "    ")
+            line.append(m, Style(bold=is_current))
+            ol.add_option(Option(line, id=m))
+
+        self._cursor = min(self._cursor, max(0, len(self._filtered) - 1))
+        if self._filtered:
+            try:
+                ol.highlighted = self._cursor
+            except Exception:
+                pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "model-search":
+            self._cursor = 0
+            self._rebuild_list(event.value)
+
+    def on_option_list_option_highlighted(self, event) -> None:
+        self._cursor = event.option_index
+
+    def action_cursor_up(self) -> None:
+        if self._cursor > 0:
+            self._cursor -= 1
+            self.query_one("#model-list", OptionList).highlighted = self._cursor
+
+    def action_cursor_down(self) -> None:
+        if self._cursor < len(self._filtered) - 1:
+            self._cursor += 1
+            self.query_one("#model-list", OptionList).highlighted = self._cursor
+
+    def action_confirm(self) -> None:
+        if self._filtered:
+            self.dismiss(self._filtered[self._cursor])
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+    def on_option_list_option_selected(self, event) -> None:
+        if event.option.id:
+            self.dismiss(event.option.id)
 
 
 class LibercodeUI(App):
@@ -762,20 +1083,6 @@ class LibercodeUI(App):
             self.query_one("#prompt-input", Input).focus()
         except Exception:
             pass
-
-    def _dispatch_command(self, cmd: str) -> None:
-        if cmd == "quit":
-            self.action_quit()
-        elif cmd == "theme":
-            self.action_cycle_theme()
-        elif cmd == "session":
-            self.action_new_session()
-        elif cmd == "clear":
-            self.action_clear_chat()
-        elif cmd == "help":
-            self._show_help()
-        else:
-            self.post_message(CommandEvent(command=cmd))
 
     def _show_help(self) -> None:
         log = self.query_one("#chat-log", RichLog)
@@ -1670,6 +1977,163 @@ class LibercodeUI(App):
                 )
 
         self.run_worker(_chat(), exclusive=True)
+
+    def open_provider_modal(self) -> None:
+        """Build provider list from registry and push ProviderModal."""
+        agent = self._agent
+        if agent is None:
+            return
+
+        from libercode.providers.registry import (
+            PROVIDER_REGISTRY, detect_available_from_env
+        )
+        env_keys = detect_available_from_env()
+        current_provider_name = agent.provider.name
+        current_model = getattr(agent.provider, 'model', '')
+        providers = []
+        for name, (cls, env_var) in PROVIDER_REGISTRY.items():
+            display = getattr(cls, 'display_name', name)
+            default_model = getattr(cls, 'default_model', '')
+            if env_var and env_var in env_keys:
+                detail = env_keys[env_var]
+                status = "ready" if name != current_provider_name else "active"
+            elif name == "builtin":
+                detail = "(local)"
+                status = "active" if name == current_provider_name else "ready"
+            else:
+                detail = env_var or ""
+                status = "unconfigured"
+            if name == current_provider_name:
+                status = "active"
+                detail = current_model
+            providers.append({
+                "name": display,
+                "default_model": default_model,
+                "status": status,
+                "detail": detail,
+            })
+        providers.sort(key=lambda p: {"active": 0, "ready": 1, "unconfigured": 2}[p["status"]])
+
+        def _on_dismiss(result):
+            if result is not None:
+                self._switch_provider_then_model(result)
+
+        self.push_screen(
+            ProviderModal(providers, current_provider_name),
+            _on_dismiss
+        )
+
+    def _switch_provider_then_model(self, provider_display_name: str) -> None:
+        """After selecting a provider, open ModelModal with lazy load."""
+        agent = self._agent
+        if agent is None:
+            return
+
+        import threading
+        from libercode.providers.registry import PROVIDER_REGISTRY
+
+        provider_key = None
+        for key, (cls, _) in PROVIDER_REGISTRY.items():
+            if getattr(cls, 'display_name', key) == provider_display_name:
+                provider_key = key
+                break
+        if provider_key is None:
+            provider_key = provider_display_name.lower()
+
+        cls, _ = PROVIDER_REGISTRY[provider_key]
+        default_model = getattr(cls, 'default_model', '')
+        static_models = getattr(cls, 'available_models', []) or ([default_model] if default_model else [])
+        current_model = getattr(agent.provider, 'model', '')
+
+        modal = ModelModal(
+            provider_name=provider_display_name,
+            current_model=current_model,
+            models=static_models,
+        )
+
+        def _fetch_models():
+            try:
+                provider = cls()
+                models = provider.list_models()
+                if models and self.is_running:
+                    self.call_from_thread(modal.set_models, models)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_fetch_models, daemon=True)
+        t.start()
+
+        def _on_model_dismiss(model_name):
+            if model_name is None:
+                return
+            async def _do_swap():
+                try:
+                    from libercode.providers.registry import build_provider
+                    new_provider = build_provider(provider_key, model=model_name)
+                    agent.provider = new_provider
+                    self.current_model = model_name
+                    self.watch_current_model(model_name)
+                    self.update_model_badge_from_thread(model_name)
+                    self.refresh_status_bar()
+                    self.write_info(f"Switched to {provider_display_name} / {model_name}")
+                except Exception as e:
+                    self.write_error(f"Provider swap failed: {e}")
+            self.run_worker(_do_swap())
+
+        self.push_screen(modal, _on_model_dismiss)
+
+    def open_model_modal(self) -> None:
+        """Open ModelModal for the current provider."""
+        agent = self._agent
+        if agent is None:
+            return
+
+        import threading
+        from libercode.providers.registry import PROVIDER_REGISTRY
+
+        current_provider = agent.provider
+        provider_name = current_provider.display_name
+        current_model = getattr(current_provider, 'model', '')
+
+        available = list(getattr(current_provider, 'available_models', []))
+        if not available:
+            default = getattr(current_provider, 'default_model', '')
+            if default:
+                available = [default]
+
+        modal = ModelModal(
+            provider_name=provider_name,
+            current_model=current_model,
+            models=available,
+        )
+
+        def _fetch():
+            try:
+                models = current_provider.list_models()
+                if models and self.is_running:
+                    self.call_from_thread(modal.set_models, models)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_fetch, daemon=True)
+        t.start()
+
+        def _on_dismiss(model_name):
+            if model_name is None:
+                return
+            async def _do_set():
+                try:
+                    agent.provider.model = model_name
+                    self.current_model = model_name
+                    self.watch_current_model(model_name)
+                    self.update_model_badge_from_thread(model_name)
+                    self.refresh_status_bar()
+                    self.write_info(f"Model → {model_name}")
+                except Exception as e:
+                    self.write_error(f"Model switch failed: {e}")
+            self.run_worker(_do_set())
+
+        self.push_screen(modal, _on_dismiss)
 
     def on_picker_selected_event(self, event: PickerSelectedEvent) -> None:
         if self._agent is None:
