@@ -1267,7 +1267,7 @@ class LibercodeUI(App):
         except Exception:
             pass
         if self._spinner_handle is not None:
-            self._spinner_handle.cancel()
+            self._spinner_handle.stop()
             self._spinner_handle = None
 
     def _tick_thinking_spinner(self) -> None:
