@@ -75,6 +75,21 @@ Runs `git stash` and displays the output.
 ### /pop
 Runs `git stash pop` and displays the output.
 
+### /checkpoint [summary]
+Saves a manual project checkpoint. The snapshot captures the current state of
+tracked files. Optionally provide a summary string.
+Example: `/checkpoint before refactor`
+
+### /restore [checkpoint_id]
+Without arguments: lists all saved checkpoints with their IDs, creation dates,
+file counts, and summaries.
+With argument: restores all files captured in the specified checkpoint, writing
+them back to disk. Path traversal is blocked for safety.
+Example: `/restore cp_abc123`
+
+### /scratch
+Shows all scratch notes stored in the project, with IDs, titles, and content previews.
+
 ### /sessions [id]
 Without arguments: lists all past sessions for the current project with IDs, modes,
 dates, and summaries. The current session is marked with ▶.

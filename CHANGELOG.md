@@ -57,3 +57,12 @@
   history into the current chat.
 - `/import` now fully restores messages, memory, tasks, and mode from
   exported JSON files (not just instructions).
+- Improved language detection for syntax-highlighted code blocks with
+  fallback panel for unknown languages and horizontal Rule divider after
+  each AI response.
+- Real-time status bar showing mode · provider · session · tokens · tasks · git branch.
+- `/checkpoint` saves manual project snapshots; `/restore` lists and restores
+  file snapshots from checkpoints with path traversal protection.
+- `/scratch` command exposed in TUI for viewing scratch notes.
+- Tool call results (shell, file, git, task) rendered as styled bordered
+  panels with icons and colors for instant visual feedback.
