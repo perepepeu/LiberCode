@@ -183,9 +183,16 @@ class LibercodeUI(App):
         background: $bg;
         padding: 0 2;
         scrollbar-size: 1 1;
+        scrollbar-gutter: stable;
         scrollbar-color: $border;
         scrollbar-color-hover: $primary;
         scrollbar-background: $bg;
+    }
+    ScrollableContainer > .scrollbar {
+        width: 1;
+    }
+    ScrollableContainer > .scrollbar--vertical {
+        width: 1;
     }
     #chat-log {
         height: auto;
@@ -202,8 +209,18 @@ class LibercodeUI(App):
         border-top: tall $border;
         padding: 1 2;
     }
-    #prompt-row   { height: auto; align-vertical: middle; }
-    #prompt-icon  { color: $primary; width: 3; margin-right: 1; }
+    #prompt-row {
+        height: auto;
+        align: left middle;
+    }
+    #prompt-icon {
+        color: $primary;
+        width: 3;
+        height: 1;
+        content-align: left middle;
+        margin-right: 1;
+        padding-top: 0;
+    }
     #prompt-input {
         height: auto;
         min-height: 1;
@@ -293,6 +310,7 @@ class LibercodeUI(App):
         self._palette_index = 0
         self._palette_items = []
         self._picker_kind = ""
+        self._agent = None
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -841,6 +859,162 @@ class LibercodeUI(App):
         if self._palette_visible:
             self._palette_select_next()
 
+    # ── Thread-safe bridge for agent communication ──
+
+    def set_agent(self, agent) -> None:
+        """Called by main() after constructing the agent."""
+        self._agent = agent
+
+    def write_output(self, content) -> None:
+        """Thread-safe: write Rich Text or str to the chat log."""
+        def _write():
+            try:
+                log = self.query_one("#chat-log", RichLog)
+                log.write(content)
+                log.scroll_end(animate=False)
+            except Exception:
+                pass
+        self.call_from_thread(_write)
+
+    def write_error(self, message: str) -> None:
+        """Thread-safe: write an error line to the chat log."""
+        t = self.theme_data
+        self.write_output(
+            Text(f"\n  ✗ {message}\n", Style(color=t["error"], bold=True))
+        )
+
+    def write_info(self, message: str) -> None:
+        """Thread-safe: write an info line to the chat log."""
+        t = self.theme_data
+        self.write_output(
+            Text(f"\n  ◈ {message}\n", Style(color=t["accent"]))
+        )
+
+    def show_picker_from_thread(self, kind: str, items: list, current: str = "") -> None:
+        """Thread-safe: ask the UI to open the picker overlay."""
+        def _open():
+            self.show_picker(kind, items, current)
+        self.call_from_thread(_open)
+
+    def update_model_badge_from_thread(self, model_name: str) -> None:
+        """Thread-safe: update the model badge in the header."""
+        def _update():
+            try:
+                t = self.theme_data
+                self.query_one("#model-badge").update(
+                    Text(f" {model_name}", style=Style(color=t["muted"]))
+                )
+            except Exception:
+                pass
+        self.call_from_thread(_update)
+
+    # ── Command dispatch ──
+
+    def _dispatch_command(self, cmd: str) -> None:
+        ui_cmds = {
+            "quit":    self.action_quit,
+            "theme":   self.action_cycle_theme,
+            "session": self.action_new_session,
+            "clear":   self.action_clear_chat,
+            "help":    self._show_help,
+        }
+        if cmd in ui_cmds:
+            ui_cmds[cmd]()
+            return
+
+        if self._agent is None:
+            self.write_error("Agent not connected.")
+            return
+
+        agent = self._agent
+        tui   = self
+
+        async def _run():
+            try:
+                await agent.handle_tui_command(cmd, "", tui)
+            except Exception as e:
+                tui.write_error(str(e))
+
+        self.run_worker(_run(), exclusive=False)
+
+    def _dispatch_command_with_args(self, cmd: str, args: str) -> None:
+        ui_cmds = {
+            "quit":    self.action_quit,
+            "theme":   self.action_cycle_theme,
+            "session": self.action_new_session,
+            "clear":   self.action_clear_chat,
+            "help":    self._show_help,
+        }
+        if cmd in ui_cmds:
+            ui_cmds[cmd]()
+            return
+
+        if self._agent is None:
+            self.write_error("Agent not connected.")
+            return
+
+        agent = self._agent
+        tui   = self
+
+        async def _run():
+            try:
+                await agent.handle_tui_command(cmd, args, tui)
+            except Exception as e:
+                tui.write_error(str(e))
+
+        self.run_worker(_run(), exclusive=False)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value.strip()
+        if not text:
+            return
+        self.query_one("#prompt-input", Input).value = ""
+
+        if text.startswith("/"):
+            parts = text[1:].split(maxsplit=1)
+            cmd  = parts[0].lower()
+            args = parts[1] if len(parts) > 1 else ""
+            self._hide_command_palette()
+            self._dispatch_command_with_args(cmd, args)
+            return
+
+        if self._agent is None:
+            self.write_error("Agent not connected.")
+            return
+
+        self.render_user_message(text)
+        agent = self._agent
+        tui   = self
+
+        async def _chat():
+            try:
+                await agent.handle_tui_message(text, tui)
+            except Exception as e:
+                tui.write_error(str(e))
+
+        self.run_worker(_chat(), exclusive=True)
+
+    def on_picker_selected_event(self, event: PickerSelectedEvent) -> None:
+        if self._agent is None:
+            return
+        agent = self._agent
+        tui   = self
+        kind  = event.kind
+        value = event.value
+
+        async def _apply():
+            await agent.handle_picker_selected(kind, value, tui)
+
+        self.run_worker(_apply(), exclusive=False)
+
 
 if __name__ == "__main__":
-    LibercodeUI().run()
+    from libercode.agent import LiberAgent
+    from libercode.config import ensure_config
+
+    cfg = ensure_config()
+    agent = LiberAgent(cfg)
+
+    app = LibercodeUI(theme_name="dracula", model=agent.provider.name)
+    app.set_agent(agent)
+    app.run()
