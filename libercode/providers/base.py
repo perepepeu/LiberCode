@@ -78,6 +78,8 @@ class BaseProvider(ABC):
         self.api_base    = api_base
         self.max_tokens  = max_tokens
         self.temperature = temperature
+        self._models_cache: list[str] = []
+        self._cache_ts: float = 0.0
 
     @property
     def name(self) -> str:
@@ -109,9 +111,22 @@ class BaseProvider(ABC):
     def list_models(self) -> list[str]:
         """
         Return available model names for this provider.
-        Default implementation returns available_models.
-        Override to fetch from API.
+        Uses a 5-minute in-memory cache. Override _fetch_models()
+        to provide live data from the API.
         """
+        import time as _time
+        if self._models_cache and _time.time() - self._cache_ts < 300:
+            return self._models_cache
+        try:
+            result = self._fetch_models()
+            self._models_cache = result
+            self._cache_ts = _time.time()
+            return result
+        except Exception:
+            return self._models_cache or list(self.available_models)
+
+    def _fetch_models(self) -> list[str]:
+        """Override in subclasses to fetch models from the API."""
         return list(self.available_models)
 
     def mask_key(self) -> str:

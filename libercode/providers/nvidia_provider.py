@@ -9,9 +9,6 @@ class NvidiaProvider(BaseProvider):
     available_models = [
         "nvidia/llama-3.1-nemotron-ultra-253b-v1",
         "nvidia/llama-3.3-70b-instruct",
-        "nvidia/llama-3.1-405b-instruct",
-        "nvidia/llama-3.1-70b-instruct",
-        "meta/llama-3.3-70b-instruct",
     ]
 
     def validate(self) -> None:
@@ -53,5 +50,12 @@ class NvidiaProvider(BaseProvider):
         except Exception as e:
             raise ProviderError(f"NVIDIA error: {e}")
 
-    def list_models(self) -> list[str]:
-        return list(self.available_models)
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://integrate.api.nvidia.com/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])

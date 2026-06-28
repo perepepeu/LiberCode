@@ -8,17 +8,7 @@ class OpenRouterProvider(BaseProvider):
     default_model = "anthropic/claude-sonnet-4-5"
     available_models = [
         "anthropic/claude-sonnet-4-5",
-        "anthropic/claude-opus-4-5",
         "openai/gpt-4o",
-        "openai/o3-mini",
-        "google/gemini-2.5-pro",
-        "google/gemini-2.0-flash",
-        "deepseek/deepseek-chat",
-        "deepseek/deepseek-r1",
-        "meta-llama/llama-3.3-70b-instruct",
-        "mistralai/mistral-large",
-        "qwen/qwen-2.5-coder-32b-instruct",
-        "microsoft/phi-4",
     ]
 
     def validate(self) -> None:
@@ -64,15 +54,12 @@ class OpenRouterProvider(BaseProvider):
         except Exception as e:
             raise ProviderError(f"OpenRouter error: {e}")
 
-    def list_models(self) -> list[str]:
-        try:
-            import httpx
-            r = httpx.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=5,
-            )
-            data = r.json().get("data", [])
-            return [m["id"] for m in data if m.get("id")][:50]
-        except Exception:
-            return self.available_models
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])[:50]

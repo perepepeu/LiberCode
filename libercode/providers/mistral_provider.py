@@ -8,11 +8,7 @@ class MistralProvider(BaseProvider):
     default_model  = "mistral-large-latest"
     available_models = [
         "mistral-large-latest",
-        "mistral-medium-latest",
         "mistral-small-latest",
-        "codestral-latest",
-        "pixtral-large-latest",
-        "open-mistral-nemo",
     ]
 
     def validate(self) -> None:
@@ -54,5 +50,12 @@ class MistralProvider(BaseProvider):
         except Exception as e:
             raise ProviderError(f"Mistral error: {e}")
 
-    def list_models(self) -> list[str]:
-        return list(self.available_models)
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.mistral.ai/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])

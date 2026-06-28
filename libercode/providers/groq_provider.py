@@ -9,9 +9,6 @@ class GroqProvider(BaseProvider):
     available_models = [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
-        "deepseek-r1-distill-llama-70b",
-        "gemma2-9b-it",
-        "mixtral-8x7b-32768",
     ]
 
     def validate(self) -> None:
@@ -51,3 +48,13 @@ class GroqProvider(BaseProvider):
                     yield delta
         except Exception as e:
             raise ProviderError(f"Groq error: {e}")
+
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])

@@ -9,10 +9,6 @@ class TogetherProvider(BaseProvider):
     available_models = [
         "meta-llama/Llama-3.3-70B-Instruct-Turbo",
         "meta-llama/Llama-3.1-8B-Instruct-Turbo",
-        "deepseek-ai/DeepSeek-R1",
-        "Qwen/Qwen2.5-Coder-32B-Instruct",
-        "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "google/gemma-2-27b-it",
     ]
 
     def validate(self) -> None:
@@ -53,3 +49,13 @@ class TogetherProvider(BaseProvider):
                     yield delta
         except Exception as e:
             raise ProviderError(f"Together error: {e}")
+
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.together.xyz/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])

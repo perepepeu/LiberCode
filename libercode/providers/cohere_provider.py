@@ -9,9 +9,6 @@ class CohereProvider(BaseProvider):
     available_models = [
         "command-r-plus",
         "command-r",
-        "command-light",
-        "command-r-plus-08-2024",
-        "command-r-08-2024",
     ]
 
     def validate(self) -> None:
@@ -52,5 +49,8 @@ class CohereProvider(BaseProvider):
                 raise
             raise ProviderError(f"Cohere error: {e}")
 
-    def list_models(self) -> list[str]:
-        return list(self.available_models)
+    def _fetch_models(self) -> list[str]:
+        import cohere
+        client = cohere.ClientV2(api_key=self.api_key)
+        models = client.models.list()
+        return sorted([m.name for m in models])

@@ -9,12 +9,6 @@ class OllamaProvider(BaseProvider):
     available_models = [
         "llama3.2",
         "llama3.1",
-        "deepseek-coder-v2",
-        "qwen2.5-coder",
-        "codestral",
-        "mistral",
-        "phi4",
-        "gemma3",
     ]
 
     def __init__(self, model="", api_key="",
@@ -60,13 +54,11 @@ class OllamaProvider(BaseProvider):
                 "Is Ollama running? Try: ollama serve"
             )
 
-    def list_models(self) -> list[str]:
-        try:
-            import httpx
-            r = httpx.get(
-                f"{self.api_base}/api/tags", timeout=3
-            )
-            data = r.json().get("models", [])
-            return [m["name"] for m in data] or self.available_models
-        except Exception:
-            return self.available_models
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            f"{self.api_base}/api/tags",
+            timeout=3,
+        )
+        data = resp.json().get("models", [])
+        return [m["name"] for m in data]

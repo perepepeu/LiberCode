@@ -9,8 +9,6 @@ class CerebrasProvider(BaseProvider):
     available_models = [
         "llama-4-scout-17b-16e-instruct",
         "llama-3.3-70b",
-        "llama-3.1-8b",
-        "qwen-2.5-32b",
     ]
 
     def validate(self) -> None:
@@ -52,5 +50,12 @@ class CerebrasProvider(BaseProvider):
         except Exception as e:
             raise ProviderError(f"Cerebras error: {e}")
 
-    def list_models(self) -> list[str]:
-        return list(self.available_models)
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.cerebras.ai/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])

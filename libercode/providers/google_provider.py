@@ -7,12 +7,8 @@ class GoogleProvider(BaseProvider):
     display_name   = "google"
     default_model  = "gemini-2.0-flash"
     available_models = [
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
+        "gemini-2.5-pro",
     ]
 
     def validate(self) -> None:
@@ -52,3 +48,21 @@ class GoogleProvider(BaseProvider):
                     yield chunk.text
         except Exception as e:
             raise ProviderError(f"Google error: {e}")
+
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": self.api_key},
+            timeout=10,
+        )
+        models = resp.json().get("models", [])
+        result = []
+        for m in models:
+            methods = m.get("supportedGenerationMethods", [])
+            if "generateContent" in methods:
+                name = m.get("name", "")
+                if name.startswith("models/"):
+                    name = name[len("models/"):]
+                result.append(name)
+        return sorted(result)

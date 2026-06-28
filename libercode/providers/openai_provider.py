@@ -9,11 +9,7 @@ class OpenAIProvider(BaseProvider):
     available_models = [
         "gpt-4o",
         "gpt-4o-mini",
-        "gpt-4-turbo",
         "gpt-4.1",
-        "o3",
-        "o3-mini",
-        "o4-mini",
     ]
 
     def validate(self) -> None:
@@ -52,15 +48,15 @@ class OpenAIProvider(BaseProvider):
         except Exception as e:
             raise ProviderError(f"OpenAI error: {e}")
 
-    def list_models(self) -> list[str]:
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=self.api_key)
-            models = client.models.list()
-            gpt = sorted(
-                [m.id for m in models.data if "gpt" in m.id or "o3" in m.id or "o4" in m.id],
-                reverse=True
-            )
-            return gpt or self.available_models
-        except Exception:
-            return self.available_models
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted(
+            [m["id"] for m in data if m["id"].startswith(("gpt-", "o1", "o3", "o4"))],
+            reverse=True,
+        )

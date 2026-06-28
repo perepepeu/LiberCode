@@ -9,7 +9,6 @@ class XAIProvider(BaseProvider):
     available_models = [
         "grok-3",
         "grok-3-mini",
-        "grok-2",
     ]
 
     def validate(self) -> None:
@@ -51,5 +50,12 @@ class XAIProvider(BaseProvider):
         except Exception as e:
             raise ProviderError(f"xAI error: {e}")
 
-    def list_models(self) -> list[str]:
-        return list(self.available_models)
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.x.ai/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])

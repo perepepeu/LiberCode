@@ -7,12 +7,8 @@ class AnthropicProvider(BaseProvider):
     display_name   = "anthropic"
     default_model  = "claude-sonnet-4-5"
     available_models = [
-        "claude-opus-4-5",
         "claude-sonnet-4-5",
         "claude-haiku-4-5",
-        "claude-3-7-sonnet-20250219",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
     ]
 
     def validate(self) -> None:
@@ -50,3 +46,16 @@ class AnthropicProvider(BaseProvider):
                     yield text
         except Exception as e:
             raise ProviderError(f"Anthropic error: {e}")
+
+    def _fetch_models(self) -> list[str]:
+        import requests
+        resp = requests.get(
+            "https://api.anthropic.com/v1/models",
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            timeout=10,
+        )
+        data = resp.json().get("data", [])
+        return sorted([m["id"] for m in data])
