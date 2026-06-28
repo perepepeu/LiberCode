@@ -2349,7 +2349,8 @@ class LibercodeUI(App):
                 from libercode.config import LiberConfig
                 cfg = LiberConfig.load()
                 if provider_key in cfg.providers:
-                    saved_key = cfg.providers[provider_key].api_key
+                    entry = cfg.providers[provider_key]
+                    saved_key = entry.get("api_key", "") if isinstance(entry, dict) else getattr(entry, "api_key", "")
             except Exception:
                 pass
 
@@ -2400,7 +2401,8 @@ class LibercodeUI(App):
                     try:
                         cfg = LiberConfig.load()
                         if provider_key in cfg.providers:
-                            saved_key = cfg.providers[provider_key].api_key
+                            entry = cfg.providers[provider_key]
+                            saved_key = entry.get("api_key", "") if isinstance(entry, dict) else getattr(entry, "api_key", "")
                     except Exception:
                         pass
                     new_provider = build_provider(
@@ -2452,6 +2454,8 @@ class LibercodeUI(App):
             self.write_error(f"Failed to save API key: {e}")
             return
 
+        if isinstance(self.screen, APIKeyModal):
+            self.pop_screen()
         self._switch_provider_then_model(provider_display_name)
 
     def open_model_modal(self) -> None:
