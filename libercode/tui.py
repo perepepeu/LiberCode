@@ -2285,7 +2285,11 @@ class LibercodeUI(App):
                 status = "active" if name == current_provider_name else "ready"
                 detail = "(local)"
             elif name in configured_keys:
-                raw_key = cfg.providers[name].api_key
+                entry = cfg.providers[name]
+                if isinstance(entry, dict):
+                    raw_key = entry.get("api_key", "")
+                else:
+                    raw_key = getattr(entry, "api_key", "")
                 if raw_key and len(raw_key) > 8:
                     detail = raw_key[:4] + "…" + raw_key[-4:]
                 elif raw_key:
