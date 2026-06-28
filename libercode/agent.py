@@ -32,7 +32,6 @@ from libercode.scratch import ScratchNotes
 from libercode.stop_condition import StopConditionChecker
 from libercode.modes import get_system_prompt
 from libercode.ui import Renderer
-from libercode.tui import CommandEvent, ShowPickerEvent, PickerSelectedEvent
 
 
 class LiberAgent:
@@ -72,6 +71,7 @@ class LiberAgent:
             "codestral-22b",
             "llama-3.1-70b",
         ]
+        self.tui_ui = None
         try:
             self._enc = tiktoken.encoding_for_model("gpt-4")
         except Exception:
@@ -772,55 +772,92 @@ class LiberAgent:
             self.mode, "white"
         )
 
-    # ── Command Event Handlers ──
+    # ── TUI Command Handlers (thread-safe via tui callbacks) ──
 
-    async def on_command_event(self, event: CommandEvent) -> None:
-        cmd  = event.command.strip()
-        args = event.args.strip()
-        dispatch = {
-            "undo":    self._cmd_undo,
-            "context": self._cmd_context,
-            "export":  self._cmd_export,
-            "import":  self._cmd_import,
-            "model":   lambda: self._cmd_model(args),
-            "mode":    lambda: self._cmd_mode(args),
-            "tasks":   self._cmd_tasks,
-            "memory":  self._cmd_memory,
-            "git":     self._cmd_git,
-            "stash":   self._cmd_stash,
-            "pop":     self._cmd_pop,
-        }
-        fn = dispatch.get(cmd)
-        if fn:
-            try:
-                await fn()
-            except Exception as e:
-                self.ui.show_error(f"/{cmd} failed: {e}")
+    async def handle_tui_command(self, cmd: str, args: str, tui) -> None:
+        self.tui_ui = tui
+
+        if cmd == "undo":
+            await self._tui_cmd_undo(tui)
+        elif cmd == "context":
+            await self._tui_cmd_context(tui)
+        elif cmd == "export":
+            await self._tui_cmd_export(tui)
+        elif cmd == "import":
+            await self._tui_cmd_import(tui)
+        elif cmd == "model":
+            await self._tui_cmd_model(args, tui)
+        elif cmd == "mode":
+            await self._tui_cmd_mode(args, tui)
+        elif cmd == "tasks":
+            await self._tui_cmd_tasks(tui)
+        elif cmd == "memory":
+            await self._tui_cmd_memory(tui)
+        elif cmd == "git":
+            output = await self._run_git_async("status", "--short")
+            self._tui_write_git_output("git status", output, tui)
+        elif cmd == "stash":
+            output = await self._run_git_async("stash")
+            self._tui_write_git_output("git stash", output, tui)
+        elif cmd == "pop":
+            output = await self._run_git_async("stash", "pop")
+            self._tui_write_git_output("git stash pop", output, tui)
         else:
-            self.ui.show_error(f"Unknown command: /{cmd}")
+            tui.write_error(f"Unknown command: /{cmd}")
 
-    async def on_picker_selected_event(self, event: PickerSelectedEvent) -> None:
-        if event.kind == "model":
-            self.model = event.value
-            self.ui.current_model = event.value
-            log = self.ui.query_one("#chat-log")
-            t   = self.ui.theme_data
-            log.write(Text(
-                f"\n  ◈ Model switched to {event.value}\n",
-                Style(color=t["accent"], bold=True)
-            ))
-        elif event.kind == "mode":
-            self.mode = event.value
-            log = self.ui.query_one("#chat-log")
-            t   = self.ui.theme_data
-            log.write(Text(
-                f"\n  ◈ Mode switched to {event.value}\n",
-                Style(color=t["accent"], bold=True)
+    async def handle_tui_message(self, user_input: str, tui) -> None:
+        self.tui_ui = tui
+        self.turn_count += 1
+        self.store.history_append(self.session_id, "user", user_input, self.mode)
+
+        history = self.store.history_get(self.session_id, limit=30)
+        messages = self._build_messages(user_input, history)
+        system   = self._system_prompt()
+
+        tui.write_info(f"{self.provider.name} thinking…")
+
+        full_response = ""
+        try:
+            for chunk in self.provider.chat_stream(messages, system=system):
+                full_response += chunk
+                tui.write_output(chunk)
+        except Exception as e:
+            tui.write_error(f"Provider error: {e}")
+            return
+
+        tui.write_output("\n")
+
+        self.store.history_append(
+            self.session_id, "assistant", full_response, self.mode
+        )
+        self.total_tokens += len(self._enc.encode(user_input + full_response))
+
+        tool_result = self._process_response(full_response)
+        if tool_result:
+            tui.write_output(Text(
+                f"\n  [tool] {tool_result}\n",
+                Style(color=tui.theme_data["muted"])
             ))
 
-    async def _cmd_undo(self) -> None:
-        log = self.ui.query_one("#chat-log")
-        t   = self.ui.theme_data
+    async def handle_picker_selected(self, kind: str, value: str, tui) -> None:
+        if kind == "model":
+            self.provider.model = value
+            tui.update_model_badge_from_thread(value)
+            tui.write_info(f"Model switched to {value}")
+        elif kind == "mode":
+            self.mode = value
+            self.store.session_update_mode(self.session_id, value)
+            tui.write_info(f"Mode switched to {value}")
+
+    def _tui_write(self, tui, content) -> None:
+        tui.write_output(content)
+
+    def _tui_sep(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("  " + "─" * 58, Style(color=t["border"])))
+
+    async def _tui_cmd_undo(self, tui) -> None:
+        t = tui.theme_data
         history = self.store.history_get(self.session_id, limit=100)
         removed = 0
         for role in ["assistant", "user"]:
@@ -830,202 +867,158 @@ class LiberAgent:
                     removed += 1
                     break
         if removed == 0:
-            self.ui.show_error("Nothing to undo.")
+            tui.write_error("Nothing to undo.")
         else:
-            log.write(Text(
+            tui.write_output(Text(
                 "  ↩ Last message pair removed from history\n",
-                Style(color=t["warning"])
+                Style(color=t.get("warning", "#f1fa8c"))
             ))
 
-    async def _cmd_context(self) -> None:
-        log = self.ui.query_one("#chat-log")
-        t   = self.ui.theme_data
-        prompt = getattr(self, "system_prompt", None) or "(no system prompt set)"
-        log.write(Text("\n  System Prompt\n", Style(color=t["primary"], bold=True)))
-        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+    async def _tui_cmd_context(self, tui) -> None:
+        t = tui.theme_data
+        prompt = self._system_prompt()
+        tui.write_output(Text("\n  System Prompt\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
         for line in prompt.splitlines():
-            log.write(Text(f"  {line}", Style(color=t["text"])))
-        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+            tui.write_output(Text(f"  {line}", Style(color=t["text"])))
+        self._tui_sep(tui)
+        tui.write_output("\n")
 
-    async def _cmd_export(self) -> None:
-        log  = self.ui.query_one("#chat-log")
-        t    = self.ui.theme_data
+    async def _tui_cmd_export(self, tui) -> None:
+        t    = tui.theme_data
         ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = Path(f"libercode_export_{ts}.json")
         try:
             history = self.store.history_get(self.session_id, limit=1000)
             payload = {
                 "exported_at": datetime.now().isoformat(),
-                "model":       getattr(self, "model", ""),
                 "mode":        self.mode,
                 "messages":    history,
                 "memory":      self.memory.all(),
                 "tasks":       self.tasks.list(),
             }
             path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-            log.write(Text(
-                f"\n  ✓ Session exported to {path}\n",
+            tui.write_output(Text(
+                f"\n  ✓ Exported to {path}\n",
                 Style(color=t["success"], bold=True)
             ))
         except Exception as e:
-            self.ui.show_error(f"Export failed: {e}")
+            tui.write_error(f"Export failed: {e}")
 
-    async def _cmd_import(self) -> None:
-        log = self.ui.query_one("#chat-log")
-        t   = self.ui.theme_data
-        log.write(Text("\n  Import\n", Style(color=t["primary"], bold=True)))
-        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
-        log.write(Text(
-            "  To import a session, run:\n"
-            "  libercode --import libercode_export_<timestamp>.json\n",
+    async def _tui_cmd_import(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("\n  Import\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Run: libercode --import libercode_export_<timestamp>.json\n",
             Style(color=t["muted"])
         ))
         exports = sorted(Path(".").glob("libercode_export_*.json"))
         if exports:
-            log.write(Text("  Available exports:", Style(color=t["text"])))
+            tui.write_output(Text("  Available exports:", Style(color=t["text"])))
             for f in exports:
-                log.write(Text(f"    {f.name}", Style(color=t["info"])))
-        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+                tui.write_output(Text(f"    {f.name}", Style(color=t.get("info", t["accent"]))))
+        self._tui_sep(tui)
+        tui.write_output("\n")
 
-    async def _cmd_model(self, args: str) -> None:
+    async def _tui_cmd_model(self, args: str, tui) -> None:
         if not args:
-            current = getattr(self, "model", "")
-            self.ui.post_message(ShowPickerEvent(
-                kind="model",
-                items=self.available_models,
-                current=current,
-            ))
+            current = getattr(self.provider, "model", "")
+            tui.show_picker_from_thread("model", self.available_models, current)
         else:
             match = next(
-                (m for m in self.available_models
-                 if args.lower() in m.lower()),
+                (m for m in self.available_models if args.lower() in m.lower()),
                 None
             )
             if match:
-                self.model = match
-                self.ui.current_model = match
-                log = self.ui.query_one("#chat-log")
-                t   = self.ui.theme_data
-                log.write(Text(
-                    f"\n  ◈ Model switched to {match}\n",
-                    Style(color=t["accent"], bold=True)
-                ))
+                self.provider.model = match
+                tui.update_model_badge_from_thread(match)
+                tui.write_info(f"Model switched to {match}")
             else:
-                self.ui.show_error(
+                tui.write_error(
                     f"Model '{args}' not found. "
                     f"Available: {', '.join(self.available_models)}"
                 )
 
     VALID_MODES = ["build", "plan", "spec", "debug"]
 
-    async def _cmd_mode(self, args: str) -> None:
+    async def _tui_cmd_mode(self, args: str, tui) -> None:
         if not args:
-            self.ui.post_message(ShowPickerEvent(
-                kind="mode",
-                items=self.VALID_MODES,
-                current=self.mode,
-            ))
+            tui.show_picker_from_thread("mode", self.VALID_MODES, self.mode)
         elif args in self.VALID_MODES:
             self.mode = args
-            log = self.ui.query_one("#chat-log")
-            t   = self.ui.theme_data
-            log.write(Text(
-                f"\n  ◈ Mode switched to {args}\n",
-                Style(color=t["accent"], bold=True)
-            ))
+            self.store.session_update_mode(self.session_id, args)
+            tui.write_info(f"Mode switched to {args}")
         else:
-            self.ui.show_error(
+            tui.write_error(
                 f"Invalid mode '{args}'. "
-                f"Valid modes: {', '.join(self.VALID_MODES)}"
+                f"Valid: {', '.join(self.VALID_MODES)}"
             )
 
-    async def _cmd_tasks(self) -> None:
-        log = self.ui.query_one("#chat-log")
-        t   = self.ui.theme_data
-        log.write(Text("\n  Tasks\n", Style(color=t["primary"], bold=True)))
-        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+    async def _tui_cmd_tasks(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("\n  Tasks\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
         tasks = self.tasks.list()
         if not tasks:
-            log.write(Text(
-                "  No tasks. Start a conversation to generate tasks.\n",
+            tui.write_output(Text(
+                "  No tasks yet. Start a conversation.\n",
                 Style(color=t["muted"])
             ))
         else:
-            for i, task in enumerate(tasks):
-                done  = task.get("done", False)
+            for i, task in enumerate(tasks[:20]):
+                done  = task.get("status", "") == "done"
                 icon  = "✓" if done else "○"
                 color = t["success"] if done else t["text"]
-                log.write(Text(
-                    f"  {icon} [{i+1}] {task.get('text', '')}",
+                tui.write_output(Text(
+                    f"  {icon} [{task.get('id','?')}] {task.get('title','')[:70]}",
                     Style(color=color)
                 ))
-        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+        self._tui_sep(tui)
+        tui.write_output("\n")
 
-    async def _cmd_memory(self) -> None:
-        log = self.ui.query_one("#chat-log")
-        t   = self.ui.theme_data
-        log.write(Text("\n  Memory\n", Style(color=t["primary"], bold=True)))
-        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+    async def _tui_cmd_memory(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("\n  Memory\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
         items = self.memory.all()
         if not items:
-            log.write(Text(
+            tui.write_output(Text(
                 "  No memory entries stored yet.\n",
                 Style(color=t["muted"])
             ))
         else:
-            for entry in items:
+            for entry in items[:20]:
                 key = entry.get("key", "")
-                val = entry.get("value", "")
+                val = entry.get("value", "")[:100]
                 line = Text()
                 line.append(f"  {key}: ", Style(color=t["accent"], bold=True))
                 line.append(val,          Style(color=t["text"]))
-                log.write(line)
-        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
+                tui.write_output(line)
+        self._tui_sep(tui)
+        tui.write_output("\n")
 
-    async def _run_git(self, *args: str) -> str:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            out = (stdout or b"").decode().strip()
-            err = (stderr or b"").decode().strip()
-            combined = (out + "\n" + err).strip()
-            return combined if combined else "(no output)"
-        except FileNotFoundError:
-            raise RuntimeError("git not found in PATH")
-        except Exception as e:
-            raise RuntimeError(str(e))
+    async def _run_git_async(self, *args: str) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        out = (stdout or b"").decode().strip()
+        err = (stderr or b"").decode().strip()
+        return (out + "\n" + err).strip() or "(no output)"
 
-    def _write_git_output(self, title: str, output: str) -> None:
-        log = self.ui.query_one("#chat-log")
-        t   = self.ui.theme_data
-        log.write(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
-        log.write(Text("  " + "─" * 58, Style(color=t["border"])))
+    def _tui_write_git_output(self, title: str, output: str, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
         for line in output.splitlines():
-            if line.startswith(("M ", " M")):
-                color = t["warning"]
-            elif line.startswith(("A ", " A")):
-                color = t["success"]
-            elif line.startswith(("D ", " D")):
-                color = t["error"]
-            elif line.startswith("??"):
-                color = t["muted"]
-            else:
-                color = t["text"]
-            log.write(Text(f"  {line}", Style(color=color)))
-        log.write(Text("  " + "─" * 58 + "\n", Style(color=t["border"])))
-
-    async def _cmd_git(self) -> None:
-        output = await self._run_git("status", "--short")
-        self._write_git_output("git status", output)
-
-    async def _cmd_stash(self) -> None:
-        output = await self._run_git("stash")
-        self._write_git_output("git stash", output)
-
-    async def _cmd_pop(self) -> None:
-        output = await self._run_git("stash", "pop")
-        self._write_git_output("git stash pop", output)
+            if line.startswith(("M ", " M")):   color = t.get("warning", "#f1fa8c")
+            elif line.startswith(("A ", " A")): color = t["success"]
+            elif line.startswith(("D ", " D")): color = t["error"]
+            elif line.startswith("??"):          color = t["muted"]
+            else:                                color = t["text"]
+            tui.write_output(Text(f"  {line}", Style(color=color)))
+        self._tui_sep(tui)
+        tui.write_output("\n")
