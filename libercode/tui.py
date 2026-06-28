@@ -79,6 +79,9 @@ COMMANDS = [
     ("/pop",       "Git stash pop",                        "muted"),
     ("/sessions",  "List and restore past sessions",       "info"),
     ("/session",   "Start a new session",                  "warning"),
+    ("/checkpoint","Save a manual project checkpoint",     "success"),
+    ("/restore",   "List and restore a past checkpoint",   "warning"),
+    ("/scratch",   "View scratch notes",                   "muted"),
     ("/quit",      "Exit libercode",                       "error"),
 ]
 
@@ -96,13 +99,47 @@ LOGO_LINES = [
 ]
 
 
-def _detect_lang(code: str) -> str:
-    if "def " in code or "import " in code:
+def _detect_lang(filename: str, content: str = "") -> str:
+    """
+    Detect programming language for syntax highlighting.
+    Checks filename extension first, then content heuristics.
+    Returns a Pygments lexer alias string.
+    """
+    import os
+    ext_map = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".tsx": "tsx", ".jsx": "jsx", ".rs": "rust", ".go": "go",
+        ".java": "java", ".c": "c", ".cpp": "cpp", ".cs": "csharp",
+        ".rb": "ruby", ".php": "php", ".swift": "swift", ".kt": "kotlin",
+        ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".fish": "fish",
+        ".html": "html", ".htm": "html", ".css": "css", ".scss": "scss",
+        ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+        ".md": "markdown", ".sql": "sql", ".xml": "xml",
+    }
+    if filename:
+        _, ext = os.path.splitext(filename.lower())
+        if ext in ext_map:
+            return ext_map[ext]
+        base = os.path.basename(filename.lower())
+        if base in ("dockerfile", "makefile", "rakefile"):
+            return base
+    head = content[:300].lower() if content else ""
+    if head.startswith("#!/usr/bin/env python") or "def " in head or "import " in head:
         return "python"
-    if "function " in code or "const " in code or "=>" in code:
+    if head.startswith("#!/bin/bash") or head.startswith("#!/bin/sh"):
+        return "bash"
+    if "function " in head and ("{" in head or "=>" in head):
         return "javascript"
-    if "fn " in code or "let mut" in code:
+    if head.startswith("package main") or "func " in head:
+        return "go"
+    if head.startswith("use strict") or "fn " in head:
         return "rust"
+    if "<html" in head or "<!doctype" in head:
+        return "html"
+    if head.strip().startswith("{") or head.strip().startswith("["):
+        return "json"
+    if "select " in head and "from " in head:
+        return "sql"
     return "text"
 
 
@@ -218,6 +255,14 @@ class LibercodeUI(App):
         background: $bg_panel;
         border-top: tall $border;
         padding: 1 2;
+    }
+    #status-bar {
+        height: 1;
+        background: $bg_panel;
+        border-top: tall $border;
+        border-bottom: tall $border;
+        padding: 0 2;
+        color: $muted;
     }
     #prompt-row {
         height: auto;
@@ -338,6 +383,7 @@ class LibercodeUI(App):
         yield Static("", id="logo-area")
         with ScrollableContainer(id="chat-area"):
             yield RichLog(id="chat-log", markup=True, highlight=True, wrap=True)
+        yield Static("", id="status-bar")
         with Vertical(id="input-area"):
             with Horizontal(id="prompt-row"):
                 yield Static("", id="mode-pill")
@@ -360,12 +406,12 @@ class LibercodeUI(App):
         self._apply_theme(self._init_theme)
         self._build_hint_bar()
         await self._animate_logo()
-        # Sync mode badge if agent already connected
         if self._agent is not None:
             self._update_mode_badge(self._agent.mode)
             self._update_mode_pill(self._agent.mode)
         else:
             self._update_mode_pill("build")
+        self.refresh_status_bar()
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
@@ -862,44 +908,56 @@ class LibercodeUI(App):
         log.write(header)
 
     def render_ai_response(self, full_text: str) -> None:
-        """Render complete AI response with Markdown and syntax-highlighted code blocks."""
-        from rich.text import Text
+        from rich.text import Text as RText
         from rich.style import Style
         from rich.syntax import Syntax
         from rich.markdown import Markdown as RichMarkdown
-        import re as _re
+        from rich.panel import Panel
+        from rich.rule import Rule
+        import re
 
         log = self.query_one("#chat-log", RichLog)
         t   = self.theme_data
 
-        CODE_BLOCK = _re.compile(r"```(\w*)\n(.*?)```", _re.DOTALL)
+        if not full_text.strip():
+            return
+
+        CODE_BLOCK = re.compile(r"```([\w.+\-]*)\n?(.*?)```", re.DOTALL)
 
         last_end = 0
         for match in CODE_BLOCK.finditer(full_text):
-            start = match.start()
-            if start > last_end:
-                before = full_text[last_end:start].strip()
-                if before:
-                    try:
-                        log.write(RichMarkdown(before))
-                    except Exception:
-                        log.write(Text(before, Style(color=t["text"])))
+            before = full_text[last_end : match.start()].strip()
+            if before:
+                try:
+                    log.write(RichMarkdown(before))
+                except Exception:
+                    log.write(RText(before, Style(color=t["text"])))
 
-            lang = match.group(1).strip() or "text"
-            code = match.group(2)
-            if lang == "text" or lang == "":
-                lang = _detect_lang(code)
+            lang_tag = match.group(1).strip()
+            code     = match.group(2)
+            if not lang_tag or lang_tag == "text":
+                lang_tag = _detect_lang("", code)
+
+            alias = {
+                "js": "javascript", "ts": "typescript", "py": "python",
+                "sh": "bash", "rb": "ruby", "rs": "rust",
+            }.get(lang_tag, lang_tag)
+
             try:
                 log.write(Syntax(
-                    code,
-                    lang,
+                    code.rstrip(), alias,
                     theme=t.get("syntax", "dracula"),
-                    line_numbers=True,
-                    word_wrap=True,
+                    line_numbers=True, word_wrap=True,
                     background_color=t["bg_panel"],
+                    indent_guides=True,
                 ))
             except Exception:
-                log.write(Text(code, Style(color=t["accent"])))
+                log.write(Panel(
+                    RText(code.rstrip(), Style(color=t["accent"])),
+                    border_style=t["border"],
+                    title=lang_tag or "code",
+                    title_align="left",
+                ))
 
             last_end = match.end()
 
@@ -908,9 +966,9 @@ class LibercodeUI(App):
             try:
                 log.write(RichMarkdown(remaining))
             except Exception:
-                log.write(Text(remaining, Style(color=t["text"])))
+                log.write(RText(remaining, Style(color=t["text"])))
 
-        log.write(Text(""))
+        log.write(Rule(style=Style(color=t["border"])))
         log.scroll_end(animate=False)
 
     def show_theme_changed(self, name: str) -> None:
@@ -939,6 +997,49 @@ class LibercodeUI(App):
         line.append(msg, Style(color=t["error"]))
         line.append("\n")
         log.write(line)
+
+    def _render_tool_result(self, tool_name: str, result: str) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from rich.panel import Panel
+        from rich.syntax import Syntax
+
+        log = self.query_one("#chat-log", RichLog)
+        t   = self.theme_data
+
+        tool_meta = {
+            "shell":       ("⚡", t["warning"],  "bash"),
+            "file:write":  ("✎",  t["success"],  "text"),
+            "file:read":   ("📄", t.get("info", t["accent"]), "text"),
+            "file:edit":   ("✏",  t["accent"],   "diff"),
+            "git":         ("⎇",  t["secondary"],"bash"),
+            "task:create": ("☑",  t["success"],  "text"),
+            "task:update": ("☑",  t["accent"],   "text"),
+            "checkpoint":  ("◉",  t["primary"],  "text"),
+            "memory":      ("🧠", t["primary"],  "text"),
+            "scratch":     ("📝", t["muted"],    "text"),
+        }
+        icon, color, lang = tool_meta.get(tool_name, ("▸", t["muted"], "text"))
+        display = result[:1500]
+        if len(result) > 1500:
+            display += f"\n… [{len(result)-1500} chars truncated]"
+        if lang == "bash" and display.strip():
+            inner = Syntax(
+                display, "bash",
+                theme=t.get("syntax", "dracula"),
+                word_wrap=True,
+                background_color=t["bg_panel"],
+            )
+        else:
+            inner = Text(display, Style(color=t["text"]))
+        log.write(Panel(
+            inner,
+            title=Text(f"{icon} {tool_name}", Style(color=color, bold=True)),
+            title_align="left",
+            border_style=color,
+            padding=(0, 1),
+        ))
+        log.scroll_end(animate=False)
 
     def cycle_theme(self) -> None:
         idx = self.THEME_NAMES.index(self.theme_data_name)
@@ -984,6 +1085,7 @@ class LibercodeUI(App):
             f"  ⇄ Mode → {new_mode}\n",
             RStyle(color=t["accent"], bold=True)
         ))
+        self.refresh_status_bar()
 
     def _update_mode_badge(self, mode: str) -> None:
         try:
@@ -1007,6 +1109,74 @@ class LibercodeUI(App):
                 color=fg, bgcolor=bg, bold=True
             )))
             pill.styles.background = bg
+        except Exception:
+            pass
+
+    def refresh_status_bar(self) -> None:
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            self._do_refresh_status_bar()
+        else:
+            self.call_from_thread(self._do_refresh_status_bar)
+
+    def _do_refresh_status_bar(self) -> None:
+        t = self.theme_data
+        agent = self._agent
+        bar   = Text()
+
+        mode = agent.mode if agent else "build"
+        mode_colors = {
+            "build": t["success"],
+            "plan":  t.get("warning", "#f1fa8c"),
+            "spec":  t.get("info",    "#8be9fd"),
+            "debug": t["error"],
+        }
+        bar.append(f" {mode.upper()} ", Style(
+            color=mode_colors.get(mode, t["primary"]), bold=True
+        ))
+        bar.append(" · ", Style(color=t["border"]))
+
+        provider = agent.provider.name if agent else "—"
+        bar.append(provider, Style(color=t["muted"]))
+        bar.append(" · ", Style(color=t["border"]))
+
+        sid = agent.session_id if agent else "—"
+        bar.append(f"#{sid}", Style(color=t["muted"]))
+        bar.append(" · ", Style(color=t["border"]))
+
+        tokens = agent.total_tokens if agent else 0
+        tok_color = (
+            t["error"]                       if tokens > 6000
+            else t.get("warning", "#f1fa8c") if tokens > 3000
+            else t["muted"]
+        )
+        bar.append(f"{tokens:,} tokens", Style(color=tok_color))
+        bar.append(" · ", Style(color=t["border"]))
+
+        try:
+            task_count = len(agent.tasks.list()) if agent else 0
+            pending    = sum(
+                1 for t2 in agent.tasks.list()
+                if t2.get("status", "") != "done"
+            ) if agent else 0
+            bar.append(
+                f"{pending} tasks",
+                Style(color=t["accent"] if pending else t["muted"])
+            )
+        except Exception:
+            bar.append("— tasks", Style(color=t["muted"]))
+
+        try:
+            if agent and agent.git.is_repo():
+                branch = agent.git.current_branch()
+                bar.append(" · ", Style(color=t["border"]))
+                bar.append(f"⎇ {branch}", Style(color=t["secondary"]))
+        except Exception:
+            pass
+
+        bar.append(" ")
+        try:
+            self.query_one("#status-bar", Static).update(bar)
         except Exception:
             pass
 
