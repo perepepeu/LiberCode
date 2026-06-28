@@ -82,6 +82,7 @@ class LiberConfig:
     provider: ProviderConfig = field(default_factory=ProviderConfig.builtin_defaults)
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     active_provider: str = "builtin"
+    theme: str = "dracula"
     mode: str = DEFAULT_MODE
     data_dir: str = str(DATA_DIR)
     max_turns: int = 30

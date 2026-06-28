@@ -860,6 +860,7 @@ class LibercodeUI(App):
         self._confirm_event: asyncio.Event | None = None
         self._confirm_result: bool = False
         self._spinner_handle = None
+        self._awaiting_api_key_for: str | None = None
         self.TOKEN_BUDGET = 8000
         super().__init__()
 
@@ -1800,6 +1801,22 @@ class LibercodeUI(App):
         next_name = self.THEME_NAMES[(idx + 1) % len(self.THEME_NAMES)]
         self._apply_theme(next_name)
         self.show_theme_changed(next_name)
+        self._save_theme(next_name)
+
+    def _save_theme(self, name: str) -> None:
+        try:
+            from libercode.config import LiberConfig, GLOBAL_CONFIG_PATH
+            import yaml
+            if GLOBAL_CONFIG_PATH.exists():
+                with open(GLOBAL_CONFIG_PATH) as f:
+                    raw = yaml.safe_load(f) or {}
+            else:
+                raw = {}
+            raw["theme"] = name
+            with open(GLOBAL_CONFIG_PATH, "w") as f:
+                yaml.dump(raw, f, default_flow_style=False)
+        except Exception:
+            pass
 
     def action_quit(self)          -> None: self.exit()
     def action_cycle_theme(self)   -> None: self.cycle_theme()
@@ -2047,6 +2064,17 @@ class LibercodeUI(App):
             self.query_one("#prompt-input", Input).value = ""
             return
 
+        if self._awaiting_api_key_for is not None:
+            provider_name = self._awaiting_api_key_for
+            api_key = text.strip()
+            self.query_one("#prompt-input", Input).value = ""
+            self._awaiting_api_key_for = None
+            if api_key:
+                self._finish_provider_switch(provider_name, api_key)
+            else:
+                self.write_error("No API key entered. Provider not changed.")
+            return
+
         if (
             self._agent is not None
             and getattr(self._agent, "_wizard_state", {}).get("step") == 3
@@ -2157,8 +2185,8 @@ class LibercodeUI(App):
         if agent is None:
             return
 
-        import threading
         from libercode.providers.registry import PROVIDER_REGISTRY
+        import threading
 
         provider_key = None
         for key, (cls, _) in PROVIDER_REGISTRY.items():
@@ -2167,6 +2195,25 @@ class LibercodeUI(App):
                 break
         if provider_key is None:
             provider_key = provider_display_name.lower()
+
+        _, env_var = PROVIDER_REGISTRY.get(provider_key, (None, ""))
+
+        if env_var:
+            saved_key = ""
+            try:
+                from libercode.config import LiberConfig
+                cfg = LiberConfig.load()
+                if provider_key in cfg.providers:
+                    saved_key = cfg.providers[provider_key].api_key
+            except Exception:
+                pass
+
+            if not saved_key:
+                self._awaiting_api_key_for = provider_display_name
+                self.write_info(
+                    f"Enter your {provider_display_name.upper()} API key:"
+                )
+                return
 
         cls, _ = PROVIDER_REGISTRY[provider_key]
         default_model = getattr(cls, 'default_model', '')
@@ -2197,7 +2244,17 @@ class LibercodeUI(App):
             async def _do_swap():
                 try:
                     from libercode.providers.registry import build_provider
-                    new_provider = build_provider(provider_key, model=model_name)
+                    from libercode.config import LiberConfig
+                    saved_key = ""
+                    try:
+                        cfg = LiberConfig.load()
+                        if provider_key in cfg.providers:
+                            saved_key = cfg.providers[provider_key].api_key
+                    except Exception:
+                        pass
+                    new_provider = build_provider(
+                        provider_key, model=model_name, api_key=saved_key
+                    )
                     agent.provider = new_provider
                     self.current_model = model_name
                     self.watch_current_model(model_name)
@@ -2207,6 +2264,38 @@ class LibercodeUI(App):
                 except Exception as e:
                     self.write_error(f"Provider swap failed: {e}")
             self.run_worker(_do_swap())
+
+    def _finish_provider_switch(self, provider_display_name: str, api_key: str) -> None:
+        """Save API key to config, then open model modal."""
+        from libercode.providers.registry import PROVIDER_REGISTRY
+
+        provider_key = None
+        for key, (cls, _) in PROVIDER_REGISTRY.items():
+            if getattr(cls, 'display_name', key) == provider_display_name:
+                provider_key = key
+                break
+        if provider_key is None:
+            provider_key = provider_display_name.lower()
+
+        try:
+            from libercode.config import LiberConfig, GLOBAL_CONFIG_PATH
+            import yaml
+            if GLOBAL_CONFIG_PATH.exists():
+                with open(GLOBAL_CONFIG_PATH) as f:
+                    raw = yaml.safe_load(f) or {}
+            else:
+                raw = {}
+            raw.setdefault("providers", {})
+            raw["providers"].setdefault(provider_key, {})
+            raw["providers"][provider_key]["api_key"] = api_key
+            with open(GLOBAL_CONFIG_PATH, "w") as f:
+                yaml.dump(raw, f, default_flow_style=False)
+            self.write_info(f"{provider_display_name.upper()} API key saved.")
+        except Exception as e:
+            self.write_error(f"Failed to save API key: {e}")
+            return
+
+        self._switch_provider_then_model(provider_display_name)
 
         try:
             self.query_one("#prompt-input", Input).blur()
