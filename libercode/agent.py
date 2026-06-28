@@ -808,35 +808,83 @@ class LiberAgent:
     async def handle_tui_message(self, user_input: str, tui) -> None:
         self.tui_ui = tui
         self.turn_count += 1
-        self.store.history_append(self.session_id, "user", user_input, self.mode)
+        self.store.history_append(
+            self.session_id, "user", user_input, self.mode
+        )
 
-        history = self.store.history_get(self.session_id, limit=30)
+        history  = self.store.history_get(self.session_id, limit=30)
         messages = self._build_messages(user_input, history)
         system   = self._system_prompt()
 
-        tui.write_info(f"{self.provider.name} thinking…")
+        # Show thinking indicator immediately — no delay
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+        tui.write_output(Text(
+            f"\n  ◐ {self.provider.name}  thinking…\n",
+            Style(color=t["muted"])
+        ))
 
         full_response = ""
-        try:
-            for chunk in self.provider.chat_stream(messages, system=system):
-                full_response += chunk
-                tui.write_output(chunk)
-        except Exception as e:
-            tui.write_error(f"Provider error: {e}")
-            return
 
+        # Run the synchronous streaming generator in a thread pool
+        # so the event loop stays free between chunks.
+        # We collect chunks via an async queue bridged from the thread.
+        import asyncio
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _stream_worker():
+            """Runs in a thread. Puts chunks into the queue."""
+            try:
+                for chunk in self.provider.chat_stream(
+                    messages, system=system
+                ):
+                    queue.put_nowait(chunk)
+            except Exception as e:
+                queue.put_nowait(Exception(e))
+            finally:
+                queue.put_nowait(None)   # sentinel
+
+        # Start the thread
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _stream_worker)
+
+        # Consume chunks as they arrive — event loop is free between awaits
+        render_buf = ""
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            if isinstance(chunk, Exception):
+                tui.write_error(f"Provider error: {chunk}")
+                return
+            full_response += chunk
+            render_buf    += chunk
+            # Flush every ~80 chars or on newline for smooth streaming feel
+            if "\n" in render_buf or len(render_buf) >= 80:
+                tui.write_output(render_buf)
+                render_buf = ""
+
+        if render_buf:
+            tui.write_output(render_buf)
         tui.write_output("\n")
+
+        if not full_response.strip():
+            tui.write_error("Empty response from provider.")
+            return
 
         self.store.history_append(
             self.session_id, "assistant", full_response, self.mode
         )
-        self.total_tokens += len(self._enc.encode(user_input + full_response))
+        self.total_tokens += len(
+            self._enc.encode(user_input + full_response)
+        )
 
         tool_result = self._process_response(full_response)
         if tool_result:
             tui.write_output(Text(
-                f"\n  [tool] {tool_result}\n",
-                Style(color=tui.theme_data["muted"])
+                f"\n  ▸ {tool_result}\n",
+                Style(color=t["muted"])
             ))
 
     async def handle_picker_selected(self, kind: str, value: str, tui) -> None:
