@@ -159,6 +159,7 @@ class LibercodeUI(App):
     #logo-text   { color: $primary; text-style: bold; width: auto; }
     #model-badge { color: $muted;   width: auto; margin-left: 2; }
     #theme-badge { color: $accent;  width: auto; margin-left: 1; }
+    #mode-badge  { color: $secondary; width: auto; margin-left: 1; }
     #spacer      { width: 1fr; }
     #token-counter {
         color: $muted;
@@ -284,14 +285,17 @@ class LibercodeUI(App):
     CTRL_C_QUIT = False
 
     BINDINGS = [
-        Binding("ctrl+c", "quit",          "quit",    priority=True, show=False),
-        Binding("ctrl+t", "cycle_theme",   "theme",   priority=True, show=False),
-        Binding("ctrl+n", "new_session",   "session", priority=True, show=False),
-        Binding("ctrl+l", "clear_chat",    "clear",   priority=True, show=False),
-        Binding("escape", "cancel_action", "cancel",  priority=True, show=False),
-        Binding("up",     "palette_up",    "up",      priority=True, show=False),
-        Binding("down",   "palette_down",  "down",    priority=True, show=False),
+        Binding("ctrl+c",  "quit",          "quit",    priority=True, show=False),
+        Binding("ctrl+t",  "cycle_theme",   "theme",   priority=True, show=False),
+        Binding("ctrl+n",  "new_session",   "session", priority=True, show=False),
+        Binding("ctrl+l",  "clear_chat",    "clear",   priority=True, show=False),
+        Binding("escape",  "cancel_action", "cancel",  priority=True, show=False),
+        Binding("tab",     "cycle_mode",    "mode",    priority=True, show=False),
+        Binding("up",      "palette_up",    "up",      priority=True, show=False),
+        Binding("down",    "palette_down",  "down",    priority=True, show=False),
     ]
+
+    AGENT_MODES = ["build", "plan", "spec", "debug"]
 
     THEME_NAMES = list(THEMES.keys())
 
@@ -311,6 +315,7 @@ class LibercodeUI(App):
         self._palette_items = []
         self._picker_kind = ""
         self._agent = None
+        self._is_processing = False
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -318,6 +323,7 @@ class LibercodeUI(App):
             yield Static("◆ libercode", id="logo-text")
             yield Static("", id="model-badge")
             yield Static("", id="theme-badge")
+            yield Static("", id="mode-badge")
             yield Static("", id="spacer")
             yield Static("0 tokens", id="token-counter")
         yield Static("", id="logo-area")
@@ -344,6 +350,9 @@ class LibercodeUI(App):
         self._apply_theme(self._init_theme)
         self._build_hint_bar()
         await self._animate_logo()
+        # Sync mode badge if agent already connected
+        if self._agent is not None:
+            self._update_mode_badge(self._agent.mode)
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
@@ -409,6 +418,9 @@ class LibercodeUI(App):
             p.styles.border = ("round", t["primary"])
         except Exception:
             pass
+
+        if self._agent is not None:
+            self._update_mode_badge(self._agent.mode)
 
     async def _animate_logo(self) -> None:
         t = self.theme_data
@@ -486,13 +498,18 @@ class LibercodeUI(App):
             self._hide_command_palette()
             return
 
-        self._palette_index = 0
+        self._palette_index   = 0
         self._palette_visible = True
 
         palette = self.query_one("#command-palette", OptionList)
         self._fill_palette_options(palette)
         palette.display = True
-        palette.focus()
+        # DO NOT call palette.focus() here — Input keeps focus.
+
+        try:
+            self.query_one("#prompt-input", Input).focus()
+        except Exception:
+            pass
 
     def _fill_palette_options(self, palette: OptionList) -> None:
         t = self.theme_data
@@ -522,6 +539,8 @@ class LibercodeUI(App):
             p.clear_options()
         except Exception:
             pass
+        # Return focus to input (not strictly needed since we never
+        # moved it, but keeps behaviour consistent)
         try:
             self.query_one("#prompt-input", Input).focus()
         except Exception:
@@ -585,7 +604,11 @@ class LibercodeUI(App):
             picker.add_option(Option(label, id=item))
         picker.highlighted = 0
         picker.display     = True
-        picker.focus()
+        # DO NOT call picker.focus() — input keeps focus
+        try:
+            self.query_one("#prompt-input", Input).focus()
+        except Exception:
+            pass
 
     def _hide_picker(self) -> None:
         try:
@@ -637,23 +660,59 @@ class LibercodeUI(App):
                 self._hide_command_palette()
 
     def on_key(self, event) -> None:
+        key = event.key
+
+        # ── Picker (model/mode overlay) ──
         try:
             picker = self.query_one("#picker", OptionList)
-            if picker.display and event.key == "escape":
-                self._hide_picker()
-                event.stop()
-                return
+            if picker.display:
+                if key == "escape":
+                    self._hide_picker()
+                    event.stop()
+                elif key == "up":
+                    n = picker.option_count
+                    cur = picker.highlighted or 0
+                    picker.highlighted = (cur - 1) % n
+                    event.stop()
+                elif key == "down":
+                    n = picker.option_count
+                    cur = picker.highlighted or 0
+                    picker.highlighted = (cur + 1) % n
+                    event.stop()
+                elif key == "enter":
+                    idx = picker.highlighted or 0
+                    opt = picker.get_option_at_index(idx)
+                    if opt is not None:
+                        self._hide_picker()
+                        self.post_message(
+                            PickerSelectedEvent(
+                                kind=self._picker_kind,
+                                value=opt.id
+                            )
+                        )
+                    event.stop()
+                return   # all other keys pass through to input while picker is open
         except Exception:
             pass
 
+        # ── Command palette ──
         if not self._palette_visible:
             return
-        if event.key == "enter":
+
+        if key == "enter":
             self._palette_confirm()
             event.stop()
-        elif event.key == "escape":
+        elif key == "escape":
             self._hide_command_palette()
             event.stop()
+        elif key == "up":
+            self._palette_select_prev()
+            event.stop()
+        elif key == "down":
+            self._palette_select_next()
+            event.stop()
+        # All other keys (letters, backspace, etc.) fall through to Input
+        # so the user can keep typing to filter the palette
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         actions = {
@@ -685,6 +744,12 @@ class LibercodeUI(App):
             value = event.option.id
             self._hide_picker()
             self.post_message(PickerSelectedEvent(kind=self._picker_kind, value=value))
+
+        # Always return focus to input
+        try:
+            self.query_one("#prompt-input", Input).focus()
+        except Exception:
+            pass
 
     def on_show_picker_event(self, event: ShowPickerEvent) -> None:
         self.show_picker(event.kind, event.items, event.current)
@@ -859,6 +924,37 @@ class LibercodeUI(App):
         if self._palette_visible:
             self._palette_select_next()
 
+    def action_cycle_mode(self) -> None:
+        if self._agent is None:
+            return
+        try:
+            cur_idx = self.AGENT_MODES.index(self._agent.mode)
+        except ValueError:
+            cur_idx = 0
+        new_mode = self.AGENT_MODES[(cur_idx + 1) % len(self.AGENT_MODES)]
+        self._agent.mode = new_mode
+        try:
+            self._agent.store.session_update_mode(
+                self._agent.session_id, new_mode
+            )
+        except Exception:
+            pass
+        self._update_mode_badge(new_mode)
+        from rich.text import Text as RText
+        from rich.style import Style as RStyle
+        t = self.theme_data
+        self.query_one("#chat-log", RichLog).write(RText(
+            f"  ⇄ Mode → {new_mode}\n",
+            RStyle(color=t["accent"], bold=True)
+        ))
+
+    def _update_mode_badge(self, mode: str) -> None:
+        try:
+            badge = self.query_one("#mode-badge", Static)
+            badge.update(Text(f" {mode}", style=Style(color=self.theme_data["secondary"])))
+        except Exception:
+            pass
+
     # ── Thread-safe bridge for agent communication ──
 
     def set_agent(self, agent) -> None:
@@ -963,12 +1059,17 @@ class LibercodeUI(App):
         text = event.value.strip()
         if not text:
             return
+
+        # Prevent double-submit while a response is streaming
+        if self._is_processing and not text.startswith("/"):
+            return
+
         self.query_one("#prompt-input", Input).value = ""
 
         if text.startswith("/"):
             parts = text[1:].split(maxsplit=1)
-            cmd  = parts[0].lower()
-            args = parts[1] if len(parts) > 1 else ""
+            cmd   = parts[0].lower().strip()
+            args  = parts[1].strip() if len(parts) > 1 else ""
             self._hide_command_palette()
             self._dispatch_command_with_args(cmd, args)
             return
@@ -977,7 +1078,9 @@ class LibercodeUI(App):
             self.write_error("Agent not connected.")
             return
 
+        self._is_processing = True
         self.render_user_message(text)
+
         agent = self._agent
         tui   = self
 
@@ -986,6 +1089,8 @@ class LibercodeUI(App):
                 await agent.handle_tui_message(text, tui)
             except Exception as e:
                 tui.write_error(str(e))
+            finally:
+                tui._is_processing = False
 
         self.run_worker(_chat(), exclusive=True)
 
