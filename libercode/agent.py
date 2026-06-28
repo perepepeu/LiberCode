@@ -21,7 +21,8 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.input import create_input
 
 from libercode.config import LiberConfig
-from libercode.providers import BuiltinProvider, CustomProvider
+from libercode.providers import BuiltinProvider, CustomProvider, build_provider, PROVIDER_REGISTRY
+from libercode.providers.base import ProviderError
 from libercode.storage.sqlite_store import SqliteStore
 from libercode.shell import ShellExecutor
 from libercode.git_utils import GitHelper
@@ -64,35 +65,65 @@ class LiberAgent:
         self.turn_count = 0
         self.total_tokens = 0
         self._spawn_depth = 0
-        self.available_models = [
-            "Qwen2.5-Coder-7B-Instruct",
-            "Qwen2.5-Coder-14B-Instruct",
-            "deepseek-coder-v2",
-            "codestral-22b",
-            "llama-3.1-70b",
-        ]
         self.tui_ui = None
         try:
             self._enc = tiktoken.encoding_for_model("gpt-4")
         except Exception:
             self._enc = tiktoken.get_encoding("cl100k_base")
 
-    def _init_provider(self):
+    def _init_provider(self) -> "BaseProvider":
         pc = self.config.provider
-        if pc.name == "builtin":
+        try:
+            return build_provider(
+                name=pc.name,
+                model=pc.model or "",
+                api_key=pc.api_key or "",
+                api_base=pc.api_base or "",
+                max_tokens=getattr(pc, "max_tokens", 4096),
+                temperature=getattr(pc, "temperature", 0.2),
+            )
+        except ProviderError as e:
+            self.console.print(f"[dim yellow]Provider warning: {e}[/]")
+            self.console.print("[dim]Falling back to builtin provider.[/]")
             return BuiltinProvider(
                 model=self.config.builtin_model,
                 api_base=self.config.builtin_api_base,
             )
-        else:
-            return CustomProvider(
-                name=pc.name,
-                api_key=pc.api_key,
-                api_base=pc.api_base,
-                model=pc.model,
-                max_tokens=pc.max_tokens,
-                temperature=pc.temperature,
+
+    @property
+    def available_models(self) -> list[str]:
+        try:
+            return self.provider.list_models()
+        except Exception:
+            return getattr(self.provider, "available_models", [])
+
+    def swap_provider(
+        self,
+        name:    str,
+        model:   str = "",
+        api_key: str = "",
+    ) -> None:
+        from libercode.providers.registry import build_provider, PROVIDER_REGISTRY
+        cls, _ = PROVIDER_REGISTRY.get(name, (None, ""))
+        resolved_model = model or (cls.default_model if cls else "")
+
+        new_provider = build_provider(
+            name=name,
+            model=resolved_model,
+            api_key=api_key,
+        )
+        self.provider = new_provider
+        self.stop_checker.set_provider(new_provider)
+
+        try:
+            self.config.save_provider_config(
+                provider_name=name,
+                api_key=api_key,
+                model=resolved_model,
+                set_active=True,
             )
+        except Exception:
+            pass
 
     def _init_session(self, project_root: Path) -> int:
         active = self.store.session_get_active(str(project_root))
@@ -840,6 +871,8 @@ class LiberAgent:
             await self._tui_cmd_lint(args, tui)
         elif cmd == "config":
             await self._tui_cmd_config(args, tui)
+        elif cmd == "provider":
+            await self._tui_cmd_provider(args, tui)
         else:
             tui.write_error(f"Unknown command: /{cmd}")
 
@@ -943,10 +976,42 @@ class LiberAgent:
             self.provider.model = value
             tui.update_model_badge_from_thread(value)
             tui.write_info(f"Model switched to {value}")
+
         elif kind == "mode":
             self.mode = value
             self.store.session_update_mode(self.session_id, value)
             tui.write_info(f"Mode switched to {value}")
+            tui._update_mode_pill(value)
+
+        elif kind == "provider_wizard":
+            await self._tui_wizard_step2(value, tui)
+
+        elif kind == "provider_model":
+            state    = getattr(self, "_wizard_state", {})
+            provider = state.get("provider", "")
+            api_key  = state.get("api_key", "")
+            if provider:
+                old = self.provider
+                try:
+                    self.swap_provider(name=provider, model=value, api_key=api_key)
+                    from rich.text import Text
+                    from rich.style import Style
+                    tui.write_output(Text(
+                        f"\n  ✓ Setup complete!\n"
+                        f"  Provider: {provider}\n"
+                        f"  Model:    {value}\n"
+                        f"  Config saved to config.toml\n",
+                        Style(color=tui.theme_data["success"], bold=True)
+                    ))
+                    tui.update_model_badge_from_thread(
+                        f"{provider} / {value}"
+                    )
+                    tui.refresh_status_bar()
+                except ProviderError as e:
+                    self.provider = old
+                    tui.write_error(f"Setup failed: {e}")
+                self._wizard_state = {}
+
         tui.refresh_status_bar()
 
     def _tui_write(self, tui, content) -> None:
@@ -1807,3 +1872,195 @@ class LiberAgent:
             ))
         except Exception as e:
             tui.write_error(f"Could not write config: {e}")
+
+    # ── Provider management ──
+
+    async def _tui_cmd_provider(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import (
+            PROVIDER_REGISTRY, build_provider
+        )
+        from libercode.providers.base import ProviderError
+        t = tui.theme_data
+
+        if args.strip() == "setup":
+            await self._tui_provider_wizard(tui)
+            return
+
+        if not args.strip() or args.strip() == "list":
+            await self._tui_provider_list(tui)
+            return
+
+        parts = args.strip().split(maxsplit=1)
+        name  = parts[0].lower()
+        model = parts[1].strip() if len(parts) > 1 else ""
+
+        if name not in PROVIDER_REGISTRY:
+            tui.write_error(
+                f"Unknown provider '{name}'. "
+                f"Available: {', '.join(PROVIDER_REGISTRY)}"
+            )
+            return
+
+        old_provider = self.provider
+        try:
+            self.swap_provider(name=name, model=model)
+            tui.write_output(Text(
+                f"\n  ✓ Provider → {name}"
+                f"  model: {self.provider.model}\n",
+                Style(color=t["success"], bold=True)
+            ))
+            tui.update_model_badge_from_thread(
+                f"{name} / {self.provider.model}"
+            )
+            tui.refresh_status_bar()
+        except ProviderError as e:
+            self.provider = old_provider
+            tui.write_error(f"Provider switch failed: {e}")
+
+    async def _tui_provider_list(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import (
+            PROVIDER_REGISTRY, detect_available_from_env
+        )
+        t    = tui.theme_data
+        envs = detect_available_from_env()
+
+        tui.write_output(Text(
+            "\n  Providers\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        for name, (cls, env_var) in PROVIDER_REGISTRY.items():
+            is_active   = (name == self.provider.display_name)
+            has_env_key = name in envs
+            no_key_needed = not env_var
+
+            if is_active:
+                status_icon  = "▶"
+                status_color = t["accent"]
+            elif has_env_key or no_key_needed:
+                status_icon  = "✓"
+                status_color = t["success"]
+            else:
+                status_icon  = "○"
+                status_color = t["muted"]
+
+            line = Text()
+            line.append(f"  {status_icon} ", Style(color=status_color, bold=True))
+            line.append(f"{name:<12}", Style(
+                color=t["primary"] if is_active else t["text"],
+                bold=is_active
+            ))
+            line.append(f"  {cls.default_model:<35}", Style(color=t["muted"]))
+            if is_active:
+                line.append(f"  ← active ({self.provider.model})",
+                            Style(color=t["accent"]))
+            elif has_env_key:
+                line.append(f"  key: {envs[name]}", Style(color=t["muted"]))
+            elif not no_key_needed:
+                line.append(f"  {env_var}", Style(color=t["muted"]))
+            tui.write_output(line)
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  /provider <name>       — switch provider\n"
+            "  /provider <name> <model> — switch provider and model\n"
+            "  /provider setup        — interactive wizard\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _tui_provider_wizard(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        t = tui.theme_data
+
+        tui.write_output(Text(
+            "\n  Provider Setup Wizard\n",
+            Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Step 1: choose a provider — "
+            "type the name and press Enter\n",
+            Style(color=t["muted"])
+        ))
+
+        provider_names = list(PROVIDER_REGISTRY.keys())
+        tui.show_picker_from_thread("provider_wizard", provider_names)
+        self._wizard_state = {"step": 1}
+
+    async def _tui_wizard_step2(self, provider_name: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        import os
+        t = tui.theme_data
+
+        cls, env_var = PROVIDER_REGISTRY.get(provider_name, (None, ""))
+        self._wizard_state = {
+            "step":     2,
+            "provider": provider_name,
+            "env_var":  env_var,
+            "cls":      cls,
+        }
+
+        if not env_var:
+            await self._tui_wizard_finish(provider_name, "", tui)
+            return
+
+        existing_key = os.environ.get(env_var, "")
+        if existing_key:
+            tui.write_output(Text(
+                f"\n  Found {env_var} in environment.\n"
+                f"  Key: {existing_key[:4]}…{existing_key[-4:]}\n",
+                Style(color=t["success"])
+            ))
+            confirmed = await tui.ask_confirm(
+                f"Use existing {env_var}?"
+            )
+            if confirmed:
+                await self._tui_wizard_finish(
+                    provider_name, existing_key, tui
+                )
+                return
+
+        tui.write_output(Text(
+            f"\n  Enter your {provider_name} API key\n"
+            "  (type key and press Enter — it will not be shown):\n",
+            Style(color=t["muted"])
+        ))
+        self._wizard_state["step"] = 3
+
+    async def _tui_wizard_finish(
+        self, provider_name: str, api_key: str, tui
+    ) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY, build_provider
+        t = tui.theme_data
+
+        cls = PROVIDER_REGISTRY.get(provider_name, (None, ""))[0]
+
+        try:
+            tmp = build_provider(provider_name, api_key=api_key)
+            models = tmp.list_models()
+        except Exception:
+            models = cls.available_models if cls else []
+
+        tui.write_output(Text(
+            f"\n  Step 2: choose a model for {provider_name}\n",
+            Style(color=t["muted"])
+        ))
+        tui.show_picker_from_thread(
+            "provider_model", models,
+            cls.default_model if cls else ""
+        )
+        self._wizard_state = {
+            "step":     4,
+            "provider": provider_name,
+            "api_key":  api_key,
+        }
