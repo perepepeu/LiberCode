@@ -636,6 +636,118 @@ class ModelModal(ModalScreen):
             self.dismiss(event.option.id)
 
 
+class APIKeyModal(ModalScreen):
+    """Centered modal for entering an API key."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Close", priority=True),
+        Binding("enter",  "confirm",      "Submit"),
+    ]
+
+    CSS = """
+    APIKeyModal {
+        align: center middle;
+        background: rgba(0,0,0,0.5);
+    }
+    #api-key-container {
+        width: 50;
+        height: auto;
+        background: #1e1f29;
+        border: round #bd93f9;
+        padding: 1 2;
+    }
+    #api-key-title {
+        width: 1fr;
+        text-align: center;
+        color: #bd93f9;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #api-key-hint {
+        width: 1fr;
+        color: #6272a4;
+        margin-bottom: 1;
+    }
+    #api-key-input {
+        width: 1fr;
+        background: #21222c;
+        color: #f8f8f2;
+        border: round #6272a4;
+        padding: 0 1;
+    }
+    #api-key-input:focus {
+        border: round #bd93f9;
+    }
+    #api-key-footer {
+        width: 1fr;
+        color: #6272a4;
+        text-align: center;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__()
+        self._provider_name = provider_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="api-key-container"):
+            yield Static(
+                f"  Enter API Key for {self._provider_name.upper()}",
+                id="api-key-title"
+            )
+            yield Static(
+                "  Your key is saved locally and never sent anywhere else.",
+                id="api-key-hint"
+            )
+            yield Input(
+                placeholder="  sk-... or nvapi-...",
+                password=True,
+                id="api-key-input"
+            )
+            yield Static(
+                "  Enter submit    Esc cancel",
+                id="api-key-footer"
+            )
+
+    def on_mount(self) -> None:
+        t = self.app.theme_data
+        try:
+            container = self.query_one("#api-key-container")
+            container.styles.background = t["bg_panel"]
+            container.styles.border = ("round", t["primary"])
+            title = self.query_one("#api-key-title")
+            title.styles.color = t["primary"]
+            hint = self.query_one("#api-key-hint")
+            hint.styles.color = t["muted"]
+            inp = self.query_one("#api-key-input", Input)
+            inp.styles.background = t["bg_input"]
+            inp.styles.color = t["text"]
+            inp.styles.border = ("round", t["border"])
+            footer = self.query_one("#api-key-footer")
+            footer.styles.color = t["muted"]
+        except Exception:
+            pass
+        self.query_one("#api-key-input", Input).focus()
+
+    def action_confirm(self) -> None:
+        val = self.query_one("#api-key-input", Input).value.strip()
+        if val:
+            self.dismiss(val)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        key = event.key
+        if key == "enter":
+            self.action_confirm()
+            event.stop()
+        elif key == "escape":
+            self.action_dismiss_none()
+            event.stop()
+
+
 class LibercodeUI(App):
     CSS = """
     $bg:         #282a36;
@@ -2064,17 +2176,6 @@ class LibercodeUI(App):
             self.query_one("#prompt-input", Input).value = ""
             return
 
-        if self._awaiting_api_key_for is not None:
-            provider_name = self._awaiting_api_key_for
-            api_key = text.strip()
-            self.query_one("#prompt-input", Input).value = ""
-            self._awaiting_api_key_for = None
-            if api_key:
-                self._finish_provider_switch(provider_name, api_key)
-            else:
-                self.write_error("No API key entered. Provider not changed.")
-            return
-
         if (
             self._agent is not None
             and getattr(self._agent, "_wizard_state", {}).get("step") == 3
@@ -2209,9 +2310,15 @@ class LibercodeUI(App):
                 pass
 
             if not saved_key:
-                self._awaiting_api_key_for = provider_display_name
-                self.write_info(
-                    f"Enter your {provider_display_name.upper()} API key:"
+                def _on_key_modal(api_key):
+                    if api_key is not None:
+                        self._finish_provider_switch(provider_display_name, api_key)
+                try:
+                    self.query_one("#prompt-input", Input).blur()
+                except Exception:
+                    pass
+                self.push_screen(
+                    APIKeyModal(provider_display_name), _on_key_modal
                 )
                 return
 
