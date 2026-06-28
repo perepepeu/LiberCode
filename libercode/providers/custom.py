@@ -1,39 +1,47 @@
 import json
 import requests
 from typing import Optional, Generator
-from libercode.providers.base import BaseProvider, request_with_retry
+from libercode.providers.base import BaseProvider, ProviderError, request_with_retry
 
 
 class CustomProvider(BaseProvider):
+    display_name = "custom"
+    default_model = "gpt-4"
+    available_models = ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+
     def __init__(
         self,
-        name: str,
-        api_key: str,
-        api_base: str,
-        model: str,
+        name: str = "custom",
+        api_key: str = "",
+        api_base: str = "",
+        model: str = "",
         max_tokens: int = 4096,
-        temperature: float = 0.7,
+        temperature: float = 0.2,
     ):
         self._name = name
-        self._api_key = api_key
-        self._api_base = api_base.rstrip("/")
-        self._model = model
-        self._max_tokens = max_tokens
-        self._temperature = temperature
+        super().__init__(
+            model=model or self.default_model,
+            api_key=api_key,
+            api_base=api_base.rstrip("/") if api_base else "",
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        self.display_name = name
 
-    @property
-    def name(self) -> str:
-        return f"{self._name}/{self._model}"
+    def validate(self) -> None:
+        if not self.api_key:
+            raise ProviderError(
+                f"API key is required for provider '{self._name}'. "
+                f"Set {self._name.upper()}_API_KEY or run /provider setup."
+            )
 
     def _headers(self):
         h = {"Content-Type": "application/json"}
-        if self._name == "openai":
-            h["Authorization"] = f"Bearer {self._api_key}"
-        elif self._name == "anthropic":
-            h["x-api-key"] = self._api_key
+        if self._name == "anthropic":
+            h["x-api-key"] = self.api_key
             h["anthropic-version"] = "2023-06-01"
         else:
-            h["Authorization"] = f"Bearer {self._api_key}"
+            h["Authorization"] = f"Bearer {self.api_key}"
         return h
 
     def _build_payload(
@@ -46,9 +54,9 @@ class CustomProvider(BaseProvider):
     ) -> dict:
         if self._name == "anthropic":
             payload = {
-                "model": self._model,
-                "max_tokens": max_tokens or self._max_tokens,
-                "temperature": temperature or self._temperature,
+                "model": self.model,
+                "max_tokens": max_tokens or self.max_tokens,
+                "temperature": temperature or self.temperature,
                 "stream": stream,
             }
             if system:
@@ -59,10 +67,10 @@ class CustomProvider(BaseProvider):
             return payload
         else:
             payload = {
-                "model": self._model,
+                "model": self.model,
                 "messages": self._build_messages(messages, system),
-                "max_tokens": max_tokens or self._max_tokens,
-                "temperature": temperature or self._temperature,
+                "max_tokens": max_tokens or self.max_tokens,
+                "temperature": temperature or self.temperature,
                 "stream": stream,
             }
             return payload
@@ -85,7 +93,7 @@ class CustomProvider(BaseProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> str:
-        url = f"{self._api_base}/chat/completions"
+        url = f"{self.api_base}/chat/completions"
         payload = self._build_payload(messages, system, temperature, max_tokens)
         try:
             resp = request_with_retry(url, payload, headers=self._headers())
@@ -106,7 +114,7 @@ class CustomProvider(BaseProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> str:
-        url = f"{self._api_base}/messages"
+        url = f"{self.api_base}/messages"
         payload = self._build_payload(messages, system, temperature, max_tokens)
         try:
             resp = request_with_retry(url, payload, headers=self._headers())
@@ -141,7 +149,7 @@ class CustomProvider(BaseProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ):
-        url = f"{self._api_base}/chat/completions"
+        url = f"{self.api_base}/chat/completions"
         payload = self._build_payload(
             messages, system, temperature, max_tokens, stream=True
         )
@@ -174,7 +182,7 @@ class CustomProvider(BaseProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ):
-        url = f"{self._api_base}/messages"
+        url = f"{self.api_base}/messages"
         payload = self._build_payload(
             messages, system, temperature, max_tokens, stream=True
         )
@@ -204,4 +212,4 @@ class CustomProvider(BaseProvider):
         if system:
             result.append({"role": "system", "content": system})
         result.extend(messages)
-        return result 
+        return result

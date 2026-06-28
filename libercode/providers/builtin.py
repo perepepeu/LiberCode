@@ -1,21 +1,38 @@
 import json
 import os
 from typing import Optional, Generator
-from libercode.providers.base import BaseProvider, request_with_retry
+from libercode.providers.base import BaseProvider, ProviderError, request_with_retry
 
 
 class BuiltinProvider(BaseProvider):
+    display_name = "builtin"
+    default_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    available_models = [
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "Qwen/Qwen2.5-Coder-14B-Instruct",
+    ]
+
     def __init__(
         self,
-        model: str = "Qwen/Qwen2.5-Coder-7B-Instruct",
+        model: str = "",
+        api_key: str = "",
         api_base: str = "https://api-inference.huggingface.co/models/",
+        max_tokens: int = 4096,
+        temperature: float = 0.2,
     ):
-        self._model = model
-        self._api_base = api_base.rstrip("/")
+        super().__init__(
+            model=model or self.default_model,
+            api_key=api_key,
+            api_base=api_base,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
-    @property
-    def name(self) -> str:
-        return f"builtin/{self._model}"
+    def validate(self) -> None:
+        if not self.api_base:
+            raise ProviderError(
+                "BuiltinProvider requires api_base (HuggingFace endpoint URL)."
+            )
 
     def _get_headers(self) -> dict:
         headers = {}
@@ -31,11 +48,11 @@ class BuiltinProvider(BaseProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> str:
-        url = f"{self._api_base}/{self._model}/v1/chat/completions"
+        url = f"{self.api_base}/{self.model}/v1/chat/completions"
         payload = {
             "messages": self._build_messages(messages, system),
-            "max_tokens": max_tokens or 4096,
-            "temperature": temperature or 0.7,
+            "max_tokens": max_tokens or self.max_tokens,
+            "temperature": temperature or self.temperature,
         }
         try:
             resp = request_with_retry(url, payload, headers=self._get_headers())
@@ -58,11 +75,11 @@ class BuiltinProvider(BaseProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Generator[str, None, None]:
-        url = f"{self._api_base}/{self._model}/v1/chat/completions"
+        url = f"{self.api_base}/{self.model}/v1/chat/completions"
         payload = {
             "messages": self._build_messages(messages, system),
-            "max_tokens": max_tokens or 4096,
-            "temperature": temperature or 0.7,
+            "max_tokens": max_tokens or self.max_tokens,
+            "temperature": temperature or self.temperature,
             "stream": True,
         }
         try:
@@ -103,4 +120,4 @@ class BuiltinProvider(BaseProvider):
             estimated = data.get("estimated_time", 30)
             return f"[Model is loading - estimated wait: {estimated}s. Please retry in a moment.]"
         except Exception:
-            return "[Model is loading. Please retry shortly.]" 
+            return "[Model is loading. Please retry shortly.]"

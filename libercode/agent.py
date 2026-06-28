@@ -1,5 +1,8 @@
+import asyncio
+import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -8,7 +11,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.prompt import Prompt
+from rich.style import Style
 from rich.table import Table
+from rich.text import Text
 from rich import box
 from prompt_toolkit import PromptSession as PTSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -16,7 +21,8 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.input import create_input
 
 from libercode.config import LiberConfig
-from libercode.providers import BuiltinProvider, CustomProvider
+from libercode.providers import BuiltinProvider, CustomProvider, build_provider, PROVIDER_REGISTRY
+from libercode.providers.base import ProviderError
 from libercode.storage.sqlite_store import SqliteStore
 from libercode.shell import ShellExecutor
 from libercode.git_utils import GitHelper
@@ -59,27 +65,65 @@ class LiberAgent:
         self.turn_count = 0
         self.total_tokens = 0
         self._spawn_depth = 0
+        self.tui_ui = None
         try:
             self._enc = tiktoken.encoding_for_model("gpt-4")
         except Exception:
             self._enc = tiktoken.get_encoding("cl100k_base")
 
-    def _init_provider(self):
+    def _init_provider(self) -> "BaseProvider":
         pc = self.config.provider
-        if pc.name == "builtin":
+        try:
+            return build_provider(
+                name=pc.name,
+                model=pc.model or "",
+                api_key=pc.api_key or "",
+                api_base=pc.api_base or "",
+                max_tokens=getattr(pc, "max_tokens", 4096),
+                temperature=getattr(pc, "temperature", 0.2),
+            )
+        except ProviderError as e:
+            self.console.print(f"[dim yellow]Provider warning: {e}[/]")
+            self.console.print("[dim]Falling back to builtin provider.[/]")
             return BuiltinProvider(
                 model=self.config.builtin_model,
                 api_base=self.config.builtin_api_base,
             )
-        else:
-            return CustomProvider(
-                name=pc.name,
-                api_key=pc.api_key,
-                api_base=pc.api_base,
-                model=pc.model,
-                max_tokens=pc.max_tokens,
-                temperature=pc.temperature,
+
+    @property
+    def available_models(self) -> list[str]:
+        try:
+            return self.provider.list_models()
+        except Exception:
+            return getattr(self.provider, "available_models", [])
+
+    def swap_provider(
+        self,
+        name:    str,
+        model:   str = "",
+        api_key: str = "",
+    ) -> None:
+        from libercode.providers.registry import build_provider, PROVIDER_REGISTRY
+        cls, _ = PROVIDER_REGISTRY.get(name, (None, ""))
+        resolved_model = model or (cls.default_model if cls else "")
+
+        new_provider = build_provider(
+            name=name,
+            model=resolved_model,
+            api_key=api_key,
+        )
+        self.provider = new_provider
+        self.stop_checker.set_provider(new_provider)
+
+        try:
+            self.config.save_provider_config(
+                provider_name=name,
+                api_key=api_key,
+                model=resolved_model,
+                set_active=True,
             )
+        except Exception:
+            pass
 
     def _init_session(self, project_root: Path) -> int:
         active = self.store.session_get_active(str(project_root))
@@ -336,13 +380,30 @@ class LiberAgent:
         return f"[Error] {result.get('error', 'Read failed')}"
 
     def _write_file(self, path: str, content: str) -> str:
-        if self.mode == "plan":
-            return "[Error] Cannot write files in plan mode."
-        target = Path(self.shell.workdir) / path
-        if not target.resolve().is_relative_to(Path(self.shell.workdir).resolve()):
+        from pathlib import Path
+        from libercode.differ import compute_diff
+
+        full_path = Path(self.shell.workdir) / path
+        if not full_path.resolve().is_relative_to(Path(self.shell.workdir).resolve()):
             return f"[Error] Path traversal blocked: {path}"
-        result = self.shell.write_file(path, content)
-        if result["success"]:
+
+        diff_lines = compute_diff(str(full_path), content)
+
+        if self.tui_ui is not None:
+            self.tui_ui._render_diff_panel(path, diff_lines)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                self.tui_ui.ask_confirm(f"Apply changes to {path}?"),
+                loop
+            )
+            confirmed = future.result(timeout=300)
+            if not confirmed:
+                return f"[File] Skipped: {path}"
+
+        try:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
             self.memory.auto_store_context(
                 f"file:{path}", f"Created/updated with {len(content)} chars"
             )
@@ -351,8 +412,9 @@ class LiberAgent:
                 and self.turn_count % self.config.checkpoint_interval == 0
             ):
                 self.checkpointer.save(summary=f"wrote {path}")
-            return f"[File] Written {len(content)} bytes to {path}"
-        return f"[Error] {result.get('error', 'Write failed')}"
+            return f"[File] Written: {path}"
+        except Exception as e:
+            return f"[File] Error writing {path}: {e}"
 
     def _edit_file(self, path: str, old: str, new: str) -> str:
         if self.mode == "plan":
@@ -758,3 +820,1287 @@ class LiberAgent:
         return {"build": "green", "plan": "yellow", "spec": "blue"}.get(
             self.mode, "white"
         )
+
+    # ── TUI Command Handlers (thread-safe via tui callbacks) ──
+
+    async def handle_tui_command(self, cmd: str, args: str, tui) -> None:
+        self.tui_ui = tui
+
+        if cmd == "undo":
+            await self._tui_cmd_undo(tui)
+        elif cmd == "context":
+            await self._tui_cmd_context(tui)
+        elif cmd == "export":
+            await self._tui_cmd_export(tui)
+        elif cmd == "import":
+            await self._tui_cmd_import(tui, args)
+        elif cmd == "model":
+            if not args.strip():
+                tui.open_model_modal()
+            else:
+                await self._tui_cmd_model(args, tui)
+        elif cmd == "mode":
+            await self._tui_cmd_mode(args, tui)
+        elif cmd == "tasks":
+            await self._tui_cmd_tasks(tui)
+        elif cmd == "memory":
+            await self._tui_cmd_memory(tui)
+        elif cmd == "git":
+            output = await self._run_git_async("status", "--short")
+            self._tui_write_git_output("git status", output, tui)
+        elif cmd == "stash":
+            output = await self._run_git_async("stash")
+            self._tui_write_git_output("git stash", output, tui)
+        elif cmd == "pop":
+            output = await self._run_git_async("stash", "pop")
+            self._tui_write_git_output("git stash pop", output, tui)
+        elif cmd == "sessions":
+            await self._tui_cmd_sessions(args, tui)
+        elif cmd == "checkpoint":
+            await self._tui_cmd_checkpoint(args, tui)
+        elif cmd == "restore":
+            await self._tui_cmd_restore(args, tui)
+        elif cmd == "scratch":
+            await self._tui_cmd_scratch(tui)
+        elif cmd == "search":
+            await self._tui_cmd_search(args, tui)
+        elif cmd == "pr":
+            await self._tui_cmd_pr(args, tui)
+        elif cmd == "review":
+            await self._tui_cmd_review(tui)
+        elif cmd == "test":
+            await self._tui_cmd_test(args, tui)
+        elif cmd == "lint":
+            await self._tui_cmd_lint(args, tui)
+        elif cmd == "config":
+            await self._tui_cmd_config(args, tui)
+        elif cmd == "provider":
+            parts = args.strip().split(maxsplit=1)
+            if not args.strip() or args.strip() in ("list", "setup"):
+                tui.open_provider_modal()
+            else:
+                name  = parts[0].lower()
+                model = parts[1].strip() if len(parts) > 1 else ""
+                await self._tui_provider_direct_switch(name, model, tui)
+        else:
+            tui.write_error(f"Unknown command: /{cmd}")
+
+    async def handle_tui_message(self, user_input: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        import asyncio
+
+        self.tui_ui = tui
+        self.turn_count += 1
+        self.store.history_append(
+            self.session_id, "user", user_input, self.mode
+        )
+
+        history  = self.store.history_get(self.session_id, limit=30)
+        messages = self._build_messages(user_input, history)
+        system   = self._system_prompt()
+        t        = tui.theme_data
+
+        # Show AI header immediately
+        tui.render_ai_header(self.provider.name)
+
+        full_response = ""
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _stream_worker():
+            try:
+                for chunk in self.provider.chat_stream(
+                    messages, system=system
+                ):
+                    queue.put_nowait(chunk)
+            except Exception as e:
+                queue.put_nowait(e)
+            finally:
+                queue.put_nowait(None)
+
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _stream_worker)
+
+        # Stream chunks into buffer — event loop free between awaits
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            if isinstance(chunk, Exception):
+                tui.write_error(f"Provider error: {chunk}")
+                return
+            full_response += chunk
+
+        if not full_response.strip():
+            tui.write_error("Empty response from provider.")
+            return
+
+        # Render with full Markdown + syntax highlighting
+        tui.render_ai_response(full_response)
+
+        self.store.history_append(
+            self.session_id, "assistant", full_response, self.mode
+        )
+        self.total_tokens += len(
+            self._enc.encode(user_input + full_response)
+        )
+
+        # Detect and render tool calls with visual panels
+        import re as _re
+        tool_pattern = _re.compile(
+            r"<tool\s+name=\"([^\"]+)\"[^>]*>(.*?)</tool>",
+            _re.DOTALL
+        )
+        tool_matches = list(tool_pattern.finditer(full_response))
+        if tool_matches:
+            for match in tool_matches:
+                tool_name = match.group(1).strip()
+                tool_body = match.group(2).strip()
+                result = self._dispatch_tool(tool_name, tool_body)
+                if result:
+                    tui._render_tool_result(tool_name, result)
+        else:
+            tool_result = self._process_response(full_response)
+            if tool_result:
+                tool_name = "shell"
+                if tool_result.startswith("[File]"):
+                    tool_name = "file:write"
+                elif tool_result.startswith("[Task]"):
+                    tool_name = "task:create"
+                elif tool_result.startswith("[Checkpoint]"):
+                    tool_name = "checkpoint"
+                elif tool_result.startswith("[Memory]"):
+                    tool_name = "memory"
+                elif tool_result.startswith("[Scratch]"):
+                    tool_name = "scratch"
+                elif tool_result.startswith("[Sub-agent"):
+                    tool_name = "agent:spawn"
+                tui._render_tool_result(tool_name, tool_result)
+
+        tui.refresh_status_bar()
+        tui.refresh_token_bar()
+
+    async def handle_picker_selected(self, kind: str, value: str, tui) -> None:
+        if kind == "model":
+            self.provider.model = value
+            tui.update_model_badge_from_thread(value)
+            tui.write_info(f"Model switched to {value}")
+
+        elif kind == "mode":
+            self.mode = value
+            self.store.session_update_mode(self.session_id, value)
+            tui.write_info(f"Mode switched to {value}")
+            tui._update_mode_pill(value)
+
+        elif kind == "provider_wizard":
+            await self._tui_wizard_step2(value, tui)
+
+        elif kind == "provider_model":
+            state    = getattr(self, "_wizard_state", {})
+            provider = state.get("provider", "")
+            api_key  = state.get("api_key", "")
+            if provider:
+                old = self.provider
+                try:
+                    self.swap_provider(name=provider, model=value, api_key=api_key)
+                    from rich.text import Text
+                    from rich.style import Style
+                    tui.write_output(Text(
+                        f"\n  ✓ Setup complete!\n"
+                        f"  Provider: {provider}\n"
+                        f"  Model:    {value}\n"
+                        f"  Config saved to config.toml\n",
+                        Style(color=tui.theme_data["success"], bold=True)
+                    ))
+                    tui.update_model_badge_from_thread(
+                        f"{provider} / {value}"
+                    )
+                    tui.refresh_status_bar()
+                except ProviderError as e:
+                    self.provider = old
+                    tui.write_error(f"Setup failed: {e}")
+                self._wizard_state = {}
+
+        tui.refresh_status_bar()
+
+    def _tui_write(self, tui, content) -> None:
+        tui.write_output(content)
+
+    def _tui_sep(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("  " + "─" * 58, Style(color=t["border"])))
+
+    async def _tui_cmd_undo(self, tui) -> None:
+        t = tui.theme_data
+        history = self.store.history_get(self.session_id, limit=100)
+        removed = 0
+        for role in ["assistant", "user"]:
+            for i in range(len(history) - 1, -1, -1):
+                if history[i].get("role") == role:
+                    history.pop(i)
+                    removed += 1
+                    break
+        if removed == 0:
+            tui.write_error("Nothing to undo.")
+        else:
+            tui.write_output(Text(
+                "  ↩ Last message pair removed from history\n",
+                Style(color=t.get("warning", "#f1fa8c"))
+            ))
+
+    async def _tui_cmd_context(self, tui) -> None:
+        t = tui.theme_data
+        prompt = self._system_prompt()
+        tui.write_output(Text("\n  System Prompt\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
+        for line in prompt.splitlines():
+            tui.write_output(Text(f"  {line}", Style(color=t["text"])))
+        self._tui_sep(tui)
+        tui.write_output("\n")
+
+    async def _tui_cmd_export(self, tui) -> None:
+        t    = tui.theme_data
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = Path(f"libercode_export_{ts}.json")
+        try:
+            history = self.store.history_get(self.session_id, limit=1000)
+            payload = {
+                "exported_at": datetime.now().isoformat(),
+                "mode":        self.mode,
+                "messages":    history,
+                "memory":      self.memory.all(),
+                "tasks":       self.tasks.list(),
+            }
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+            tui.write_output(Text(
+                f"\n  ✓ Exported to {path}\n",
+                Style(color=t["success"], bold=True)
+            ))
+        except Exception as e:
+            tui.write_error(f"Export failed: {e}")
+
+    async def _tui_cmd_import(self, tui, args: str = "") -> None:
+        from rich.text import Text
+        from rich.style import Style
+        import json
+        t = tui.theme_data
+
+        # If no filename given → show instructions + list files
+        if not args:
+            tui.write_output(Text(
+                "\n  Import\n", Style(color=t["primary"], bold=True)
+            ))
+            self._tui_sep(tui)
+            tui.write_output(Text(
+                "  Usage: /import <filename>\n",
+                Style(color=t["muted"])
+            ))
+            exports = sorted(Path(".").glob("libercode_export_*.json"))
+            if exports:
+                tui.write_output(Text(
+                    "  Available exports:", Style(color=t["text"])
+                ))
+                for f in exports:
+                    size = f.stat().st_size // 1024
+                    tui.write_output(Text(
+                        f"    {f.name}  ({size}kb)",
+                        Style(color=t.get("info", t["accent"]))
+                    ))
+            else:
+                tui.write_output(Text(
+                    "  No libercode_export_*.json files found in current directory.\n",
+                    Style(color=t["muted"])
+                ))
+            self._tui_sep(tui)
+            return
+
+        # Filename was given → load and import
+        path = Path(args.strip())
+
+        if not path.exists():
+            path = Path.cwd() / args.strip()
+
+        if not path.exists():
+            tui.write_error(f"File not found: {args.strip()}")
+            return
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            tui.write_error(f"Failed to read file: {e}")
+            return
+
+        imported = {"messages": 0, "memory": 0, "tasks": 0}
+
+        messages = payload.get("messages", [])
+        for msg in messages:
+            role    = msg.get("role", "")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content:
+                self.store.history_append(
+                    self.session_id, role, content,
+                    payload.get("mode", self.mode)
+                )
+                imported["messages"] += 1
+
+        for entry in payload.get("memory", []):
+            key = entry.get("key", "")
+            val = entry.get("value", "")
+            cat = entry.get("category", "general")
+            if key:
+                self.memory.remember(key, val, cat)
+                imported["memory"] += 1
+
+        for task in payload.get("tasks", []):
+            title = task.get("title", "") or task.get("text", "")
+            desc  = task.get("description", "")
+            if title:
+                self.tasks.create(title, desc, mode=self.mode)
+                imported["tasks"] += 1
+
+        if "mode" in payload and payload["mode"] in self.VALID_MODES:
+            self.mode = payload["mode"]
+            self.store.session_update_mode(self.session_id, self.mode)
+            tui._update_mode_pill(self.mode)
+
+        tui.write_output(Text(
+            f"\n  ✓ Import complete from {path.name}\n",
+            Style(color=t["success"], bold=True)
+        ))
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            f"  Messages: {imported['messages']}\n"
+            f"  Memory:   {imported['memory']}\n"
+            f"  Tasks:    {imported['tasks']}\n",
+            Style(color=t["text"])
+        ))
+        self._tui_sep(tui)
+
+    async def _tui_cmd_model(self, args: str, tui) -> None:
+        if not args:
+            current = getattr(self.provider, "model", "")
+            tui.show_picker_from_thread("model", self.available_models, current)
+        else:
+            match = next(
+                (m for m in self.available_models if args.lower() in m.lower()),
+                None
+            )
+            if match:
+                self.provider.model = match
+                tui.update_model_badge_from_thread(match)
+                tui.write_info(f"Model switched to {match}")
+            else:
+                tui.write_error(
+                    f"Model '{args}' not found. "
+                    f"Available: {', '.join(self.available_models)}"
+                )
+
+    VALID_MODES = ["build", "plan", "spec", "debug"]
+
+    async def _tui_cmd_mode(self, args: str, tui) -> None:
+        if not args:
+            tui.show_picker_from_thread("mode", self.VALID_MODES, self.mode)
+        elif args in self.VALID_MODES:
+            self.mode = args
+            self.store.session_update_mode(self.session_id, args)
+            tui.write_info(f"Mode switched to {args}")
+            tui.refresh_status_bar()
+        else:
+            tui.write_error(
+                f"Invalid mode '{args}'. "
+                f"Valid: {', '.join(self.VALID_MODES)}"
+            )
+
+    async def _tui_cmd_tasks(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("\n  Tasks\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
+        tasks = self.tasks.list()
+        if not tasks:
+            tui.write_output(Text(
+                "  No tasks yet. Start a conversation.\n",
+                Style(color=t["muted"])
+            ))
+        else:
+            for i, task in enumerate(tasks[:20]):
+                done  = task.get("status", "") == "done"
+                icon  = "✓" if done else "○"
+                color = t["success"] if done else t["text"]
+                tui.write_output(Text(
+                    f"  {icon} [{task.get('id','?')}] {task.get('title','')[:70]}",
+                    Style(color=color)
+                ))
+        self._tui_sep(tui)
+        tui.write_output("\n")
+        tui.refresh_status_bar()
+
+    async def _tui_cmd_checkpoint(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t       = tui.theme_data
+        summary = args.strip() if args.strip() else f"manual checkpoint — turn {self.turn_count}"
+        try:
+            cid = self.checkpointer.save(summary=summary)
+            tui.write_output(Text(
+                f"\n  ✓ Checkpoint saved: {cid}\n"
+                f"  Summary: {summary}\n",
+                Style(color=t["success"], bold=True)
+            ))
+        except Exception as e:
+            tui.write_error(f"Checkpoint failed: {e}")
+
+    async def _tui_cmd_restore(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+        try:
+            cps = self.checkpointer.list()
+        except Exception as e:
+            tui.write_error(f"Could not load checkpoints: {e}")
+            return
+        if not args.strip():
+            tui.write_output(Text(
+                "\n  Checkpoints\n", Style(color=t["primary"], bold=True)
+            ))
+            self._tui_sep(tui)
+            if not cps:
+                tui.write_output(Text(
+                    "  No checkpoints saved yet.\n",
+                    Style(color=t["muted"])
+                ))
+            else:
+                for cp in cps[:15]:
+                    cid     = cp.get("id", "?")
+                    created = str(cp.get("created_at", ""))[:16]
+                    summ    = cp.get("summary", "")[:60]
+                    nfiles  = len(cp.get("snapshot", {}).get("files", {}))
+                    line    = Text()
+                    line.append(f"  {cid}", Style(color=t["accent"], bold=True))
+                    line.append(f"  {created}", Style(color=t["muted"]))
+                    line.append(f"  {nfiles} files", Style(color=t["text"]))
+                    line.append(f"  {summ}", Style(color=t["muted"]))
+                    tui.write_output(line)
+            self._tui_sep(tui)
+            tui.write_output(Text(
+                "  Use /restore <checkpoint_id> to restore files.\n",
+                Style(color=t["muted"])
+            ))
+            return
+        target_id = args.strip()
+        cp = next((c for c in cps if str(c.get("id", "")) == target_id), None)
+        if cp is None:
+            tui.write_error(f"Checkpoint '{target_id}' not found.")
+            return
+        snapshot = cp.get("snapshot", {})
+        files    = snapshot.get("files", {})
+        if not files:
+            tui.write_error(f"Checkpoint {target_id} has no file snapshot.")
+            return
+        restored = 0
+        errors   = []
+        for rel_path, content in files.items():
+            try:
+                full_path = Path(self.shell.workdir) / rel_path
+                if not full_path.resolve().is_relative_to(
+                    Path(self.shell.workdir).resolve()
+                ):
+                    errors.append(f"Blocked: {rel_path}")
+                    continue
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content, encoding="utf-8")
+                restored += 1
+            except Exception as e:
+                errors.append(f"{rel_path}: {e}")
+        tui.write_output(Text(
+            f"\n  ✓ Restored {restored} files from checkpoint {target_id}\n",
+            Style(color=t["success"], bold=True)
+        ))
+        if errors:
+            for err in errors:
+                tui.write_error(err)
+
+    async def _tui_cmd_scratch(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+        tui.write_output(Text(
+            "\n  Scratch Notes\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+        try:
+            notes = self.scratch.list()
+        except Exception as e:
+            tui.write_error(f"Could not load notes: {e}")
+            return
+        if not notes:
+            tui.write_output(Text(
+                "  No scratch notes yet.\n", Style(color=t["muted"])
+            ))
+        else:
+            for n in notes[:20]:
+                nid     = n.get("id", "?")
+                title   = n.get("title", "")
+                content = n.get("content", "")[:80]
+                line    = Text()
+                line.append(f"  #{nid} ", Style(color=t["accent"], bold=True))
+                line.append(f"{title}  ", Style(color=t["text"], bold=True))
+                line.append(content,      Style(color=t["muted"]))
+                tui.write_output(line)
+        self._tui_sep(tui)
+
+    async def _tui_cmd_sessions(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        # If an ID was passed → restore that session
+        if args.strip().isdigit():
+            await self._tui_restore_session(int(args.strip()), tui)
+            return
+
+        # Otherwise → list all sessions for this project
+        try:
+            sessions = self.store.session_list(str(Path.cwd().resolve()))
+        except Exception as e:
+            tui.write_error(f"Could not load sessions: {e}")
+            return
+
+        tui.write_output(Text(
+            "\n  Sessions\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        if not sessions:
+            tui.write_output(Text(
+                "  No past sessions found.\n", Style(color=t["muted"])
+            ))
+        else:
+            for s in sessions[:20]:
+                sid     = s.get("id", "?")
+                mode    = s.get("mode", "?")
+                started = str(s.get("started_at", ""))[:16]
+                ended   = str(s.get("ended_at", ""))[:16] or "active"
+                summary = s.get("summary", "")[:50]
+                is_cur  = (sid == self.session_id)
+
+                line = Text()
+                line.append(
+                    "  ▶ " if is_cur else "    ",
+                    Style(color=t["accent"], bold=True)
+                )
+                line.append(f"#{sid}", Style(
+                    color=t["accent"] if is_cur else t["primary"],
+                    bold=is_cur
+                ))
+                line.append(f"  {mode:<6}", Style(color=t["secondary"]))
+                line.append(f"  {started}", Style(color=t["muted"]))
+                line.append(f"  → {ended}", Style(color=t["muted"]))
+                if summary:
+                    line.append(f"  {summary}", Style(color=t["text"]))
+                tui.write_output(line)
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Use /sessions <id> to restore a session.\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _tui_restore_session(self, session_id: int, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        try:
+            history = self.store.history_get(session_id, limit=50)
+        except Exception as e:
+            tui.write_error(f"Could not load session #{session_id}: {e}")
+            return
+
+        if not history:
+            tui.write_error(f"Session #{session_id} has no messages.")
+            return
+
+        self.session_id = session_id
+
+        tui.write_output(Text(
+            f"\n  ◈ Restored session #{session_id}\n",
+            Style(color=t["accent"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        for msg in history[-20:]:
+            role    = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                tui.render_user_message(content[:300])
+            elif role == "assistant":
+                tui.render_ai_response(content[:1000])
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            f"  Session #{session_id} loaded. Continue where you left off.\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _run_git_async(self, *args: str) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        out = (stdout or b"").decode().strip()
+        err = (stderr or b"").decode().strip()
+        return (out + "\n" + err).strip() or "(no output)"
+
+    async def _run_git(self, *args: str) -> str:
+        return await self._run_git_async(*args)
+
+    def _tui_write_git_output(self, title: str, output: str, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
+        for line in output.splitlines():
+            if line.startswith(("M ", " M")):   color = t.get("warning", "#f1fa8c")
+            elif line.startswith(("A ", " A")): color = t["success"]
+            elif line.startswith(("D ", " D")): color = t["error"]
+            elif line.startswith("??"):          color = t["muted"]
+            else:                                color = t["text"]
+            tui.write_output(Text(f"  {line}", Style(color=color)))
+        self._tui_sep(tui)
+        tui.write_output("\n")
+
+    # ── Feature 10: /search ──
+
+    async def _tui_cmd_search(self, query: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        if not query.strip():
+            tui.write_error("Usage: /search <term>")
+            return
+
+        q = query.strip().lower()
+
+        try:
+            history = self.store.history_get(self.session_id, limit=1000)
+        except Exception as e:
+            tui.write_error(f"Could not search history: {e}")
+            return
+
+        matches = [
+            msg for msg in history
+            if q in msg.get("content", "").lower()
+        ]
+
+        tui.write_output(Text(
+            f'\n  Search: "{query}"\n',
+            Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        if not matches:
+            tui.write_output(Text(
+                f'  No results for "{query}"\n',
+                Style(color=t["muted"])
+            ))
+        else:
+            tui.write_output(Text(
+                f"  {len(matches)} result(s) found\n",
+                Style(color=t["accent"])
+            ))
+            for msg in matches[:10]:
+                role    = msg.get("role", "?")
+                content = msg.get("content", "")
+                ts      = str(msg.get("created_at", ""))[:16]
+
+                idx   = content.lower().find(q)
+                start = max(0, idx - 60)
+                end   = min(len(content), idx + len(q) + 60)
+                excerpt = ("…" if start > 0 else "") + \
+                          content[start:end] + \
+                          ("…" if end < len(content) else "")
+
+                line = Text()
+                line.append(f"  [{role}]", Style(
+                    color=t["secondary"] if role == "user" else t["primary"],
+                    bold=True
+                ))
+                line.append(f"  {ts}  ", Style(color=t["muted"]))
+
+                lo = excerpt.lower()
+                qi = lo.find(q)
+                if qi >= 0:
+                    line.append(excerpt[:qi],        Style(color=t["text"]))
+                    line.append(excerpt[qi:qi+len(q)], Style(
+                        color=t["bg"], bgcolor=t["accent"], bold=True
+                    ))
+                    line.append(excerpt[qi+len(q):], Style(color=t["text"]))
+                else:
+                    line.append(excerpt, Style(color=t["text"]))
+
+                tui.write_output(line)
+                tui.write_output(Text(""))
+
+        self._tui_sep(tui)
+
+    # ── Feature 16: /pr and /review ──
+
+    async def _tui_cmd_pr(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        if not self.git.is_repo():
+            tui.write_error("Not a git repository.")
+            return
+
+        branch = (await self._run_git("rev-parse", "--abbrev-ref", "HEAD")).strip()
+        if branch in ("main", "master", "HEAD"):
+            tui.write_error(
+                f"Current branch is '{branch}'. "
+                "Create a feature branch first."
+            )
+            return
+
+        base = "main"
+        base_check = (await self._run_git("rev-parse", "--verify", "main")).strip()
+        if base_check.startswith("fatal"):
+            base = "master"
+
+        log_raw = await self._run_git(
+            "log", f"{base}..HEAD", "--oneline", "--no-decorate"
+        )
+        diff_raw = await self._run_git("diff", f"{base}...HEAD", "--stat")
+
+        tui.write_info("Generating PR description…")
+        pr_prompt = (
+            f"Generate a GitHub pull request title and description for "
+            f"branch '{branch}' based on these commits:\n\n"
+            f"{log_raw}\n\nFiles changed:\n{diff_raw}\n\n"
+            "Format:\nTITLE: <title>\n\nBODY:\n<markdown body>"
+        )
+
+        import asyncio
+        import queue as _queue
+        q: asyncio.Queue = asyncio.Queue()
+
+        def _gen():
+            try:
+                for chunk in self.provider.chat_stream(
+                    [{"role": "user", "content": pr_prompt}],
+                    system="You are a helpful git assistant."
+                ):
+                    q.put_nowait(chunk)
+            except Exception as e:
+                q.put_nowait(e)
+            finally:
+                q.put_nowait(None)
+
+        asyncio.get_event_loop().run_in_executor(None, _gen)
+        full = ""
+        while True:
+            chunk = await q.get()
+            if chunk is None:
+                break
+            if isinstance(chunk, Exception):
+                tui.write_error(str(chunk))
+                return
+            full += chunk
+
+        title, body = branch, ""
+        if "TITLE:" in full:
+            parts = full.split("TITLE:", 1)[1]
+            lines = parts.strip().splitlines()
+            title = lines[0].strip()
+            if "BODY:" in full:
+                body = full.split("BODY:", 1)[1].strip()
+
+        tui.write_output(Text(f"\n  PR Title:  {title}\n",
+                              Style(color=t["primary"], bold=True)))
+        if body:
+            tui.write_output(Text(f"  Body preview:\n  {body[:200]}\n",
+                                  Style(color=t["muted"])))
+
+        confirmed = await tui.ask_confirm("Push branch and open PR?")
+        if not confirmed:
+            tui.write_info("PR cancelled.")
+            return
+
+        push_out = await self._run_git("push", "-u", "origin", branch)
+        tui.write_output(Text(f"  {push_out}\n", Style(color=t["muted"])))
+
+        body_escaped = body.replace('"', '\\"').replace('\n', '\\n')
+        gh_cmd = (
+            f'gh pr create --title "{title}" '
+            f'--body "{body_escaped[:500]}" --base {base}'
+        )
+        tui._render_tool_result("shell", gh_cmd)
+
+        push_result = await self._run_git(
+            *(gh_cmd.split())
+        )
+        if "https://github.com" in push_result:
+            url = [w for w in push_result.split() if w.startswith("https://")][0]
+            tui.write_output(Text(
+                f"\n  ✓ PR created: {url}\n",
+                Style(color=t["success"], bold=True)
+            ))
+        else:
+            tui.write_output(Text(
+                f"\n  Pushed. Run:\n  {gh_cmd}\n",
+                Style(color=t["accent"])
+            ))
+
+    async def _tui_cmd_review(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        if not self.git.is_repo():
+            tui.write_error("Not a git repository.")
+            return
+
+        diff = await self._run_git("diff", "HEAD")
+        if not diff.strip():
+            diff = await self._run_git("diff", "--cached")
+        if not diff.strip():
+            tui.write_error("No uncommitted changes to review.")
+            return
+
+        tui.write_info("Reviewing current diff…")
+        review_prompt = (
+            "Review the following git diff. List:\n"
+            "1. Potential bugs or issues\n"
+            "2. Code quality suggestions\n"
+            "3. Security concerns (if any)\n"
+            "4. What looks good\n\n"
+            f"```diff\n{diff[:6000]}\n```"
+        )
+        await self.handle_tui_message(review_prompt, tui)
+
+    # ── Feature 17: /test and /lint ──
+
+    def _detect_project_type(self) -> str:
+        root = Path(self.shell.workdir)
+        if (root / "Cargo.toml").exists():        return "rust"
+        if (root / "package.json").exists():      return "node"
+        if (root / "pyproject.toml").exists():    return "python"
+        if (root / "setup.py").exists():          return "python"
+        if (root / "requirements.txt").exists():  return "python"
+        if (root / "go.mod").exists():            return "go"
+        if (root / "pom.xml").exists():           return "java"
+        return "unknown"
+
+    async def _run_cmd(self, *args: str) -> str:
+        import asyncio
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=self.shell.workdir,
+            )
+            stdout, _ = await proc.communicate()
+            return stdout.decode("utf-8", errors="replace").strip() or "(no output)"
+        except FileNotFoundError:
+            return f"Command not found: {args[0]}"
+        except Exception as e:
+            return f"Error running {args[0]}: {e}"
+
+    async def _tui_cmd_test(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        project = self._detect_project_type()
+        cmd_map = {
+            "python": ["python", "-m", "pytest", "--tb=short", "-q"],
+            "node":   ["npx", "jest", "--no-coverage"],
+            "rust":   ["cargo", "test"],
+            "go":     ["go", "test", "./..."],
+            "java":   ["mvn", "test", "-q"],
+        }
+
+        cmd_args = cmd_map.get(project)
+        if args.strip():
+            cmd_args = args.strip().split()
+        if not cmd_args:
+            tui.write_error(
+                f"Unknown project type '{project}'. "
+                "Provide a command: /test pytest tests/"
+            )
+            return
+
+        tui.write_info(f"Running: {' '.join(cmd_args)}")
+        output = await self._run_cmd(*cmd_args)
+        tui._render_tool_result("shell", output)
+
+        if any(kw in output.lower() for kw in ["error", "failed", "failure", "assert"]):
+            tui.write_info("Summarising failures…")
+            summary_prompt = (
+                "Summarise only the test failures from this test output. "
+                "For each failure, state what failed and suggest a fix.\n\n"
+                f"```\n{output[:4000]}\n```"
+            )
+            await self.handle_tui_message(summary_prompt, tui)
+
+    async def _tui_cmd_lint(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        project = self._detect_project_type()
+        cmd_map = {
+            "python": ["ruff", "check", "."],
+            "node":   ["npx", "eslint", ".", "--max-warnings=0"],
+            "rust":   ["cargo", "clippy", "--", "-D", "warnings"],
+            "go":     ["golangci-lint", "run"],
+        }
+
+        cmd_args = cmd_map.get(project)
+        if args.strip():
+            cmd_args = args.strip().split()
+        if not cmd_args:
+            tui.write_error(
+                f"Unknown project type '{project}'. "
+                "Provide a command: /lint ruff check ."
+            )
+            return
+
+        tui.write_info(f"Running: {' '.join(cmd_args)}")
+        output = await self._run_cmd(*cmd_args)
+        tui._render_tool_result("shell", output)
+
+        if output.strip() and "no issues" not in output.lower():
+            tui.write_info("Asking agent to fix lint issues…")
+            fix_prompt = (
+                "Here are the linter warnings. "
+                "For each issue, explain what the problem is and how to fix it. "
+                "Show the corrected code snippet for the top 5 issues.\n\n"
+                f"```\n{output[:4000]}\n```"
+            )
+            await self.handle_tui_message(fix_prompt, tui)
+
+    # ── Feature 18: /config ──
+
+    async def _tui_cmd_config(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from pathlib import Path
+        t = tui.theme_data
+
+        config_path = Path(
+            self.config.config_file
+            if hasattr(self.config, "config_file")
+            else Path.home() / ".config" / "libercode" / "config.toml"
+        )
+
+        if "=" in args:
+            key, val = args.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            await self._tui_config_set(config_path, key, val, tui)
+            return
+
+        tui.write_output(Text(
+            "\n  Configuration\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            f"  File: {config_path}\n", Style(color=t["muted"])
+        ))
+        self._tui_sep(tui)
+
+        if not config_path.exists():
+            tui.write_output(Text(
+                "  Config file not found. Using defaults.\n",
+                Style(color=t["muted"])
+            ))
+        else:
+            try:
+                raw = config_path.read_text(encoding="utf-8")
+                from rich.syntax import Syntax
+                tui.write_output(Syntax(
+                    raw, "toml",
+                    theme="dracula",
+                    line_numbers=True,
+                    background_color=t["bg_panel"],
+                ))
+            except Exception as e:
+                tui.write_error(f"Could not read config: {e}")
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Usage: /config key = value\n"
+            "  Example: /config provider.model = deepseek-coder-v2\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _tui_config_set(
+        self, config_path, key: str, val: str, tui
+    ) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        try:
+            import tomllib
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except ImportError:
+            try:
+                import toml
+                data = toml.load(str(config_path)) if config_path.exists() else {}
+            except Exception:
+                data = {}
+        except Exception:
+            data = {}
+
+        parts = key.split(".")
+        node  = data
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = val
+
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                import toml
+                config_path.write_text(
+                    toml.dumps(data), encoding="utf-8"
+                )
+            except ImportError:
+                pass
+
+            tui.write_output(Text(
+                f"\n  ✓ {key} = {val}\n"
+                "  Restart libercode for changes to take effect.\n",
+                Style(color=t["success"], bold=True)
+            ))
+        except Exception as e:
+            tui.write_error(f"Could not write config: {e}")
+
+    # ── Provider management ──
+
+    async def _tui_cmd_provider(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import (
+            PROVIDER_REGISTRY, build_provider
+        )
+        from libercode.providers.base import ProviderError
+        t = tui.theme_data
+
+        if args.strip() == "setup":
+            await self._tui_provider_wizard(tui)
+            return
+
+        if not args.strip() or args.strip() == "list":
+            await self._tui_provider_list(tui)
+            return
+
+        parts = args.strip().split(maxsplit=1)
+        name  = parts[0].lower()
+        model = parts[1].strip() if len(parts) > 1 else ""
+
+        if name not in PROVIDER_REGISTRY:
+            tui.write_error(
+                f"Unknown provider '{name}'. "
+                f"Available: {', '.join(PROVIDER_REGISTRY)}"
+            )
+            return
+
+        old_provider = self.provider
+        try:
+            self.swap_provider(name=name, model=model)
+            tui.write_output(Text(
+                f"\n  ✓ Provider → {name}"
+                f"  model: {self.provider.model}\n",
+                Style(color=t["success"], bold=True)
+            ))
+            tui.update_model_badge_from_thread(
+                f"{name} / {self.provider.model}"
+            )
+            tui.refresh_status_bar()
+        except ProviderError as e:
+            self.provider = old_provider
+            tui.write_error(f"Provider switch failed: {e}")
+
+    async def _tui_provider_direct_switch(self, name: str, model: str, tui) -> None:
+        """Switch provider directly by name, optionally setting model."""
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        from libercode.providers.base import ProviderError
+        t = tui.theme_data
+
+        if name not in PROVIDER_REGISTRY:
+            tui.write_error(
+                f"Unknown provider '{name}'. "
+                f"Available: {', '.join(PROVIDER_REGISTRY)}"
+            )
+            return
+
+        old_provider = self.provider
+        try:
+            self.swap_provider(name=name, model=model)
+            tui.write_output(Text(
+                f"\n  ✓ Provider → {name}"
+                f"  model: {self.provider.model}\n",
+                Style(color=t["success"], bold=True)
+            ))
+            tui.update_model_badge_from_thread(
+                f"{name} / {self.provider.model}"
+            )
+            tui.refresh_status_bar()
+        except ProviderError as e:
+            self.provider = old_provider
+            tui.write_error(f"Provider switch failed: {e}")
+
+    async def _tui_provider_list(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import (
+            PROVIDER_REGISTRY, detect_available_from_env
+        )
+        t    = tui.theme_data
+        envs = detect_available_from_env()
+
+        tui.write_output(Text(
+            "\n  Providers\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        for name, (cls, env_var) in PROVIDER_REGISTRY.items():
+            is_active   = (name == self.provider.display_name)
+            has_env_key = name in envs
+            no_key_needed = not env_var
+
+            if is_active:
+                status_icon  = "▶"
+                status_color = t["accent"]
+            elif has_env_key or no_key_needed:
+                status_icon  = "✓"
+                status_color = t["success"]
+            else:
+                status_icon  = "○"
+                status_color = t["muted"]
+
+            line = Text()
+            line.append(f"  {status_icon} ", Style(color=status_color, bold=True))
+            line.append(f"{name:<12}", Style(
+                color=t["primary"] if is_active else t["text"],
+                bold=is_active
+            ))
+            line.append(f"  {cls.default_model:<35}", Style(color=t["muted"]))
+            if is_active:
+                line.append(f"  ← active ({self.provider.model})",
+                            Style(color=t["accent"]))
+            elif has_env_key:
+                line.append(f"  key: {envs[name]}", Style(color=t["muted"]))
+            elif not no_key_needed:
+                line.append(f"  {env_var}", Style(color=t["muted"]))
+            tui.write_output(line)
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  /provider <name>       — switch provider\n"
+            "  /provider <name> <model> — switch provider and model\n"
+            "  /provider setup        — interactive wizard\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _tui_provider_wizard(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        t = tui.theme_data
+
+        tui.write_output(Text(
+            "\n  Provider Setup Wizard\n",
+            Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Step 1: choose a provider — "
+            "type the name and press Enter\n",
+            Style(color=t["muted"])
+        ))
+
+        provider_names = list(PROVIDER_REGISTRY.keys())
+        tui.show_picker_from_thread("provider_wizard", provider_names)
+        self._wizard_state = {"step": 1}
+
+    async def _tui_wizard_step2(self, provider_name: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY
+        import os
+        t = tui.theme_data
+
+        cls, env_var = PROVIDER_REGISTRY.get(provider_name, (None, ""))
+        self._wizard_state = {
+            "step":     2,
+            "provider": provider_name,
+            "env_var":  env_var,
+            "cls":      cls,
+        }
+
+        if not env_var:
+            await self._tui_wizard_finish(provider_name, "", tui)
+            return
+
+        existing_key = os.environ.get(env_var, "")
+        if existing_key:
+            tui.write_output(Text(
+                f"\n  Found {env_var} in environment.\n"
+                f"  Key: {existing_key[:4]}…{existing_key[-4:]}\n",
+                Style(color=t["success"])
+            ))
+            confirmed = await tui.ask_confirm(
+                f"Use existing {env_var}?"
+            )
+            if confirmed:
+                await self._tui_wizard_finish(
+                    provider_name, existing_key, tui
+                )
+                return
+
+        tui.write_output(Text(
+            f"\n  Enter your {provider_name} API key\n"
+            "  (type key and press Enter — it will not be shown):\n",
+            Style(color=t["muted"])
+        ))
+        self._wizard_state["step"] = 3
+
+    async def _tui_wizard_finish(
+        self, provider_name: str, api_key: str, tui
+    ) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from libercode.providers.registry import PROVIDER_REGISTRY, build_provider
+        t = tui.theme_data
+
+        cls = PROVIDER_REGISTRY.get(provider_name, (None, ""))[0]
+
+        try:
+            tmp = build_provider(provider_name, api_key=api_key)
+            models = tmp.list_models()
+        except Exception:
+            models = cls.available_models if cls else []
+
+        tui.write_output(Text(
+            f"\n  Step 2: choose a model for {provider_name}\n",
+            Style(color=t["muted"])
+        ))
+        tui.show_picker_from_thread(
+            "provider_model", models,
+            cls.default_model if cls else ""
+        )
+        self._wizard_state = {
+            "step":     4,
+            "provider": provider_name,
+            "api_key":  api_key,
+        }
