@@ -866,15 +866,14 @@ class LibercodeUI(App):
         self._agent = agent
 
     def write_output(self, content) -> None:
-        """Thread-safe: write Rich Text or str to the chat log."""
-        def _write():
-            try:
-                log = self.query_one("#chat-log", RichLog)
-                log.write(content)
-                log.scroll_end(animate=False)
-            except Exception:
-                pass
-        self.call_from_thread(_write)
+        """Write Rich Text or str to the chat log. Safe when called from
+        run_worker coroutines (which run on the event loop)."""
+        try:
+            log = self.query_one("#chat-log", RichLog)
+            log.write(content)
+            log.scroll_end(animate=False)
+        except Exception:
+            pass
 
     def write_error(self, message: str) -> None:
         """Thread-safe: write an error line to the chat log."""
@@ -891,22 +890,18 @@ class LibercodeUI(App):
         )
 
     def show_picker_from_thread(self, kind: str, items: list, current: str = "") -> None:
-        """Thread-safe: ask the UI to open the picker overlay."""
-        def _open():
-            self.show_picker(kind, items, current)
-        self.call_from_thread(_open)
+        """Open the picker overlay."""
+        self.show_picker(kind, items, current)
 
     def update_model_badge_from_thread(self, model_name: str) -> None:
-        """Thread-safe: update the model badge in the header."""
-        def _update():
-            try:
-                t = self.theme_data
-                self.query_one("#model-badge").update(
-                    Text(f" {model_name}", style=Style(color=t["muted"]))
-                )
-            except Exception:
-                pass
-        self.call_from_thread(_update)
+        """Update the model badge in the header."""
+        try:
+            t = self.theme_data
+            self.query_one("#model-badge").update(
+                Text(f" {model_name}", style=Style(color=t["muted"]))
+            )
+        except Exception:
+            pass
 
     # ── Command dispatch ──
 
