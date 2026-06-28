@@ -230,6 +230,7 @@ class ProviderModal(ModalScreen):
     CSS = """
     ProviderModal {
         align: center middle;
+        background: rgba(0,0,0,0.5);
     }
     #provider-modal-container {
         width: 62;
@@ -411,6 +412,7 @@ class ModelModal(ModalScreen):
     CSS = """
     ModelModal {
         align: center middle;
+        background: rgba(0,0,0,0.5);
     }
     #provider-modal-container {
         width: 62;
@@ -765,7 +767,7 @@ class LibercodeUI(App):
         Binding("ctrl+t",  "cycle_theme",   "theme",   priority=True, show=False),
         Binding("ctrl+n",  "new_session",   "session", priority=True, show=False),
         Binding("ctrl+l",  "clear_chat",    "clear",   priority=True, show=False),
-        Binding("escape",  "cancel_action", "cancel",  priority=True, show=False),
+        Binding("escape",  "cancel_action", "cancel",  priority=False, show=False),
         Binding("tab",     "cycle_mode",    "mode",    priority=True, show=False),
         Binding("up",      "palette_up",    "up",      priority=True, show=False),
         Binding("down",    "palette_down",  "down",    priority=True, show=False),
@@ -1150,6 +1152,11 @@ class LibercodeUI(App):
 
     def on_key(self, event) -> None:
         key = event.key
+
+        # ── When a modal is active, don't intercept any keys ──
+        for screen in self.screen_stack:
+            if isinstance(screen, (ProviderModal, ModelModal)):
+                return
 
         # ── Picker (model/mode overlay) ──
         try:
