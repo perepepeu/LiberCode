@@ -689,7 +689,6 @@ class APIKeyModal(ModalScreen):
         height: auto;
         align: center middle;
         margin-top: 1;
-        gap: 2;
     }
     #api-key-confirm {
         min-width: 12;
