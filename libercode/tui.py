@@ -58,6 +58,38 @@ THEMES = {
         "error": "#bf616a", "warning": "#ebcb8b", "success": "#a3be8c", "info": "#5e81ac",
         "user_icon": "›", "ai_icon": "◇", "syntax": "nord",
     },
+    "gruvbox": {
+        "bg": "#282828", "bg_panel": "#3c3836", "bg_input": "#32302f",
+        "border": "#504945", "border_act": "#d79921",
+        "primary": "#d79921", "secondary": "#458588", "accent": "#b8bb26",
+        "text": "#ebdbb2", "muted": "#928374",
+        "error": "#fb4934", "warning": "#fabd2f", "success": "#b8bb26", "info": "#83a598",
+        "user_icon": "◈", "ai_icon": "◆", "syntax": "monokai",
+    },
+    "solarized": {
+        "bg": "#002b36", "bg_panel": "#073642", "bg_input": "#002b36",
+        "border": "#073642", "border_act": "#2aa198",
+        "primary": "#268bd2", "secondary": "#2aa198", "accent": "#b58900",
+        "text": "#839496", "muted": "#586e75",
+        "error": "#dc322f", "warning": "#cb4b16", "success": "#859900", "info": "#6c71c4",
+        "user_icon": "›", "ai_icon": "◇", "syntax": "monokai",
+    },
+    "onedark": {
+        "bg": "#282c34", "bg_panel": "#21252b", "bg_input": "#1e2227",
+        "border": "#3e4452", "border_act": "#61afef",
+        "primary": "#61afef", "secondary": "#c678dd", "accent": "#e5c07b",
+        "text": "#abb2bf", "muted": "#5c6370",
+        "error": "#e06c75", "warning": "#e5c07b", "success": "#98c379", "info": "#56b6c2",
+        "user_icon": "›", "ai_icon": "✦", "syntax": "monokai",
+    },
+    "rosepine": {
+        "bg": "#191724", "bg_panel": "#1f1d2e", "bg_input": "#26233a",
+        "border": "#403d52", "border_act": "#c4a7e7",
+        "primary": "#c4a7e7", "secondary": "#9ccfd8", "accent": "#f6c177",
+        "text": "#e0def4", "muted": "#6e6a86",
+        "error": "#eb6f92", "warning": "#f6c177", "success": "#31748f", "info": "#9ccfd8",
+        "user_icon": "•", "ai_icon": "◆", "syntax": "monokai",
+    },
 }
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -82,10 +114,25 @@ COMMANDS = [
     ("/checkpoint","Save a manual project checkpoint",     "success"),
     ("/restore",   "List and restore a past checkpoint",   "warning"),
     ("/scratch",   "View scratch notes",                   "muted"),
+    ("/search",    "Search conversation history",          "info"),
+    ("/pr",        "Create a GitHub pull request",         "success"),
+    ("/review",    "Review the current git diff",          "warning"),
+    ("/test",      "Run tests (auto-detected runner)",     "success"),
+    ("/lint",      "Run linter (auto-detected runner)",    "warning"),
+    ("/config",    "View and edit configuration",          "info"),
     ("/quit",      "Exit libercode",                       "error"),
 ]
 
 DEFAULT_MODEL = "Qwen2.5-Coder-7B-Instruct"
+
+COMMAND_ARGS: dict[str, list[str]] = {
+    "mode":     ["build", "plan", "spec", "debug"],
+    "model":    [],
+    "sessions": [],
+    "restore":  [],
+    "theme":    ["dracula", "tokyonight", "catppuccin", "kanagawa",
+                 "nord", "gruvbox", "solarized", "onedark", "rosepine"],
+}
 
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 
@@ -180,6 +227,9 @@ class LibercodeUI(App):
     $accent:     #50fa7b;
     $text:       #f8f8f2;
     $muted:      #6272a4;
+    $warning:    #ffb86c;
+    $error:      #ff5555;
+    $success:    #50fa7b;
 
     Screen {
         background: $bg;
@@ -212,6 +262,11 @@ class LibercodeUI(App):
         width: auto;
         margin-right: 2;
         text-align: right;
+    }
+    #token-bar {
+        width: 12;
+        height: 1;
+        margin-left: 2;
     }
 
     /* ── LOGO ── */
@@ -247,6 +302,16 @@ class LibercodeUI(App):
         padding: 1 0;
     }
 
+    /* ── STATUS BAR ── */
+    #status-bar {
+        height: 1;
+        background: $bg_panel;
+        border-top: tall $border;
+        border-bottom: tall $border;
+        padding: 0 2;
+        color: $muted;
+    }
+
     /* ── INPUT ── */
     #input-area {
         height: auto;
@@ -255,14 +320,6 @@ class LibercodeUI(App):
         background: $bg_panel;
         border-top: tall $border;
         padding: 1 2;
-    }
-    #status-bar {
-        height: 1;
-        background: $bg_panel;
-        border-top: tall $border;
-        border-bottom: tall $border;
-        padding: 0 2;
-        color: $muted;
     }
     #prompt-row {
         height: auto;
@@ -286,6 +343,15 @@ class LibercodeUI(App):
         padding: 0 1;
     }
     #prompt-input:focus { border: round $border_act; }
+    #prompt-input.thinking {
+        border: round $primary;
+        background: $bg_panel;
+    }
+
+    /* ── THINKING ANIMATION ── */
+    #mode-pill.thinking {
+        text-style: bold blink;
+    }
 
     /* ── HINT BAR ── */
     #hint-bar {
@@ -370,6 +436,10 @@ class LibercodeUI(App):
         self._picker_kind = ""
         self._agent = None
         self._is_processing = False
+        self._confirm_event: asyncio.Event | None = None
+        self._confirm_result: bool = False
+        self._spinner_handle = None
+        self.TOKEN_BUDGET = 8000
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -380,6 +450,7 @@ class LibercodeUI(App):
             yield Static("", id="mode-badge")
             yield Static("", id="spacer")
             yield Static("0 tokens", id="token-counter")
+            yield Static("░░░░░░░░░░░░", id="token-bar")
         yield Static("", id="logo-area")
         with ScrollableContainer(id="chat-area"):
             yield RichLog(id="chat-log", markup=True, highlight=True, wrap=True)
@@ -409,9 +480,11 @@ class LibercodeUI(App):
         if self._agent is not None:
             self._update_mode_badge(self._agent.mode)
             self._update_mode_pill(self._agent.mode)
+            self.refresh_token_bar()
         else:
             self._update_mode_pill("build")
         self.refresh_status_bar()
+        self._show_welcome()
 
     def _apply_theme(self, name: str) -> None:
         self.theme_data_name = name
@@ -633,20 +706,26 @@ class LibercodeUI(App):
             pass
 
     def _palette_confirm(self) -> None:
+        """Execute the currently highlighted palette item."""
         if not self._palette_items:
             return
-        try:
-            palette = self.query_one("#command-palette", OptionList)
-            idx = palette.highlighted or 0
-            cmd, _, _ = self._palette_items[idx]
-        except Exception:
-            return
+        idx = min(self._palette_index, len(self._palette_items) - 1)
+        cmd_full, _, _ = self._palette_items[idx]
+
         self._hide_command_palette()
-        try:
-            self.query_one("#prompt-input", Input).value = ""
-        except Exception:
-            pass
-        self._dispatch_command(cmd.lstrip("/"))
+
+        if " " in cmd_full[1:]:
+            try:
+                self.query_one("#prompt-input", Input).value = cmd_full
+            except Exception:
+                pass
+        else:
+            cmd = cmd_full.lstrip("/")
+            try:
+                self.query_one("#prompt-input", Input).value = ""
+            except Exception:
+                pass
+            self._dispatch_command(cmd)
 
     def show_picker(self, kind: str, items: list, current: str = "") -> None:
         self._picker_kind = kind
@@ -712,14 +791,20 @@ class LibercodeUI(App):
         log.write(Text("  " + "─" * 50 + "\n", Style(color=t["border"])))
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        val = event.value
-        if val.startswith("/"):
-            query = val[1:]
-            self._palette_index = 0
-            self._show_command_palette(query)
+        value = event.value
+
+        if not value.startswith("/"):
+            self._hide_command_palette()
+            return
+
+        rest = value[1:]
+        if " " in rest:
+            cmd, arg_prefix = rest.split(" ", 1)
+            cmd = cmd.lower()
+            self._show_arg_palette(cmd, arg_prefix.strip())
         else:
-            if self._palette_visible:
-                self._hide_command_palette()
+            self._palette_index = 0
+            self._show_command_palette(rest.lower())
 
     def on_key(self, event) -> None:
         key = event.key
@@ -1041,6 +1126,243 @@ class LibercodeUI(App):
         ))
         log.scroll_end(animate=False)
 
+    def _render_diff_panel(self, path: str, diff_lines) -> None:
+        """Render a diff panel in the chat log."""
+        from rich.panel import Panel
+        from libercode.differ import render_diff
+        t = self.theme_data
+        log = self.query_one("#chat-log", RichLog)
+        body = render_diff(diff_lines, t)
+        if not body.plain.strip():
+            return
+        log.write(Panel(
+            body,
+            title=Text(f"  diff  {path}", Style(color=t["primary"], bold=True)),
+            title_align="left",
+            border_style=t["border"],
+            padding=(0, 1),
+        ))
+        log.scroll_end(animate=False)
+
+    def _show_confirm(self, question: str) -> None:
+        """Show a y/n prompt inline. Does not steal focus."""
+        t = self.theme_data
+        log = self.query_one("#chat-log", RichLog)
+        msg = Text()
+        msg.append(f"\n  ⚠  {question} ", Style(color=t["warning"], bold=True))
+        msg.append("[y/N]", Style(color=t["accent"], bold=True))
+        msg.append("  → type y or n and press Enter\n", Style(color=t["muted"]))
+        log.write(msg)
+        log.scroll_end(animate=False)
+
+    async def ask_confirm(self, question: str) -> bool:
+        """Show a y/n question and wait for the user's answer."""
+        import asyncio
+        self._confirm_event  = asyncio.Event()
+        self._confirm_result = False
+        self._show_confirm(question)
+        await self._confirm_event.wait()
+        self._confirm_event = None
+        return self._confirm_result
+
+    def _show_arg_palette(self, cmd: str, prefix: str) -> None:
+        """Show argument suggestions for a command."""
+        from textual.widgets._option_list import Option
+
+        arg_list = list(COMMAND_ARGS.get(cmd, []))
+
+        if cmd == "model" and self._agent:
+            arg_list = self._agent.available_models
+        elif cmd == "sessions" and self._agent:
+            try:
+                slist = self._agent.store.session_list(
+                    str(Path.cwd().resolve())
+                )
+                arg_list = [str(s["id"]) for s in slist]
+            except Exception:
+                arg_list = []
+        elif cmd == "restore" and self._agent:
+            try:
+                cps = self._agent.checkpointer.list()
+                arg_list = [str(c["id"]) for c in cps]
+            except Exception:
+                arg_list = []
+
+        if not arg_list:
+            self._hide_command_palette()
+            return
+
+        filtered = [a for a in arg_list if a.lower().startswith(prefix.lower())]
+        if not filtered:
+            filtered = arg_list
+
+        self._palette_items   = [(f"/{cmd} {a}", a, "accent") for a in filtered]
+        self._palette_index   = 0
+        self._palette_visible = True
+
+        palette = self.query_one("#command-palette", OptionList)
+        palette.clear_options()
+        t = self.theme_data
+        for full_cmd, label, _ in self._palette_items:
+            display = Text()
+            display.append(f"/{cmd} ", Style(color=t["muted"]))
+            display.append(label, Style(color=t["accent"], bold=True))
+            palette.add_option(Option(display, id=full_cmd))
+        palette.display = True
+        try:
+            self.query_one("#prompt-input", Input).focus()
+        except Exception:
+            pass
+
+    def refresh_token_bar(self) -> None:
+        """Update token progress bar. Safe from any thread."""
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            self._do_refresh_token_bar()
+        else:
+            self.call_from_thread(self._do_refresh_token_bar)
+
+    def _do_refresh_token_bar(self) -> None:
+        if self._agent is None:
+            return
+        used   = self._agent.total_tokens
+        budget = self.TOKEN_BUDGET
+        pct    = min(100, int(used / budget * 100))
+        t      = self.theme_data
+
+        filled = pct // 5
+        empty  = 20 - filled
+        bar_text = "█" * filled + "░" * empty
+
+        color = t["success"]
+        if pct >= 85:
+            color = t["error"]
+        elif pct >= 60:
+            color = t["warning"]
+
+        try:
+            bar = self.query_one("#token-bar", Static)
+            bar.update(Text(f" {bar_text} {pct}%", Style(color=color)))
+        except Exception:
+            pass
+
+    _SPINNER_CHARS = ["◐", "◓", "◑", "◒"]
+    _spinner_idx    = 0
+
+    def start_thinking(self) -> None:
+        """Animate the input border and mode pill while processing."""
+        try:
+            self.query_one("#prompt-input", Input).add_class("thinking")
+            self.query_one("#mode-pill", Static).add_class("thinking")
+        except Exception:
+            pass
+        self._spinner_idx = 0
+        self._tick_thinking_spinner()
+
+    def stop_thinking(self) -> None:
+        """Remove the thinking animation."""
+        try:
+            self.query_one("#prompt-input", Input).remove_class("thinking")
+            self.query_one("#mode-pill", Static).remove_class("thinking")
+        except Exception:
+            pass
+        if self._spinner_handle is not None:
+            self._spinner_handle.cancel()
+            self._spinner_handle = None
+
+    def _tick_thinking_spinner(self) -> None:
+        frame = self._SPINNER_CHARS[self._spinner_idx % len(self._SPINNER_CHARS)]
+        self._spinner_idx += 1
+        try:
+            mode  = self._agent.mode if self._agent else "build"
+            fg, _ = self.MODE_PILL_COLORS.get(mode, ("#bd93f9", "#1e1a2a"))
+            self.query_one("#mode-pill", Static).update(
+                Text(f" {frame} {mode.upper()} ",
+                     Style(color=fg, bold=True))
+            )
+        except Exception:
+            pass
+        self._spinner_handle = self.set_timer(0.15, self._tick_thinking_spinner)
+
+    def _show_welcome(self) -> None:
+        """Show welcome panel on startup."""
+        from rich.panel import Panel
+        from datetime import datetime
+        t   = self.theme_data
+        log = self.query_one("#chat-log", RichLog)
+
+        now     = datetime.now()
+        hour    = now.hour
+        greeting = (
+            "Good morning" if 5  <= hour < 12
+            else "Good afternoon" if 12 <= hour < 18
+            else "Good evening"
+        )
+
+        agent = self._agent
+        body  = Text()
+
+        body.append(f"  {greeting}!\n", Style(color=t["primary"], bold=True))
+        body.append(f"  {now.strftime('%A, %B %d %Y')}\n\n",
+                    Style(color=t["muted"]))
+
+        if agent:
+            try:
+                sessions = agent.store.session_list(
+                    str(Path.cwd().resolve())
+                )
+                if len(sessions) > 1:
+                    last = sessions[1]
+                    body.append("  Last session  ", Style(color=t["text"]))
+                    body.append(
+                        str(last.get("started_at", ""))[:10],
+                        Style(color=t["accent"])
+                    )
+                    body.append("\n")
+            except Exception:
+                pass
+
+            try:
+                pending = [
+                    tk for tk in agent.tasks.list()
+                    if tk.get("status", "") != "done"
+                ]
+                body.append(f"  Pending tasks  ", Style(color=t["text"]))
+                body.append(str(len(pending)), Style(color=t["accent"], bold=True))
+                body.append("\n")
+            except Exception:
+                pass
+
+            try:
+                if agent.git.is_repo():
+                    status = agent.git.run("status", "--short")
+                    n_files = len([
+                        l for l in status.splitlines() if l.strip()
+                    ])
+                    body.append(f"  Modified files  ", Style(color=t["text"]))
+                    body.append(str(n_files), Style(color=t["accent"], bold=True))
+                    body.append("\n")
+            except Exception:
+                pass
+
+            body.append(f"\n  Active mode  ", Style(color=t["text"]))
+            body.append(agent.mode, Style(color=t["secondary"], bold=True))
+            body.append("\n")
+
+        body.append(
+            "\n  Type a message or / for commands. Tab cycles mode.\n",
+            Style(color=t["muted"])
+        )
+
+        log.write(Panel(
+            body,
+            title=Text("  LiberCode  ", Style(color=t["primary"], bold=True)),
+            title_align="left",
+            border_style=t["primary"],
+            padding=(0, 1),
+        ))
+        log.write(Text(""))
+
     def cycle_theme(self) -> None:
         idx = self.THEME_NAMES.index(self.theme_data_name)
         next_name = self.THEME_NAMES[(idx + 1) % len(self.THEME_NAMES)]
@@ -1185,6 +1507,7 @@ class LibercodeUI(App):
     def set_agent(self, agent) -> None:
         """Called by main() after constructing the agent."""
         self._agent = agent
+        self.refresh_token_bar()
 
     def write_output(self, content) -> None:
         """Write Rich Text or str to the chat log. Safe when called from
@@ -1285,6 +1608,13 @@ class LibercodeUI(App):
         if not text:
             return
 
+        if self._confirm_event is not None and not self._confirm_event.is_set():
+            val = text.lower().strip()
+            self._confirm_result = val in ("y", "yes")
+            self._confirm_event.set()
+            self.query_one("#prompt-input", Input).value = ""
+            return
+
         # Prevent double-submit while a response is streaming
         if self._is_processing and not text.startswith("/"):
             return
@@ -1310,12 +1640,17 @@ class LibercodeUI(App):
         tui   = self
 
         async def _chat():
+            tui.start_thinking()
             try:
                 await agent.handle_tui_message(text, tui)
             except Exception as e:
                 tui.write_error(str(e))
             finally:
                 tui._is_processing = False
+                tui.stop_thinking()
+                tui._update_mode_pill(
+                    agent.mode if agent else "build"
+                )
 
         self.run_worker(_chat(), exclusive=True)
 

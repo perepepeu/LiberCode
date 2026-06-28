@@ -349,13 +349,30 @@ class LiberAgent:
         return f"[Error] {result.get('error', 'Read failed')}"
 
     def _write_file(self, path: str, content: str) -> str:
-        if self.mode == "plan":
-            return "[Error] Cannot write files in plan mode."
-        target = Path(self.shell.workdir) / path
-        if not target.resolve().is_relative_to(Path(self.shell.workdir).resolve()):
+        from pathlib import Path
+        from libercode.differ import compute_diff
+
+        full_path = Path(self.shell.workdir) / path
+        if not full_path.resolve().is_relative_to(Path(self.shell.workdir).resolve()):
             return f"[Error] Path traversal blocked: {path}"
-        result = self.shell.write_file(path, content)
-        if result["success"]:
+
+        diff_lines = compute_diff(str(full_path), content)
+
+        if self.tui_ui is not None:
+            self.tui_ui._render_diff_panel(path, diff_lines)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                self.tui_ui.ask_confirm(f"Apply changes to {path}?"),
+                loop
+            )
+            confirmed = future.result(timeout=300)
+            if not confirmed:
+                return f"[File] Skipped: {path}"
+
+        try:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
             self.memory.auto_store_context(
                 f"file:{path}", f"Created/updated with {len(content)} chars"
             )
@@ -364,8 +381,9 @@ class LiberAgent:
                 and self.turn_count % self.config.checkpoint_interval == 0
             ):
                 self.checkpointer.save(summary=f"wrote {path}")
-            return f"[File] Written {len(content)} bytes to {path}"
-        return f"[Error] {result.get('error', 'Write failed')}"
+            return f"[File] Written: {path}"
+        except Exception as e:
+            return f"[File] Error writing {path}: {e}"
 
     def _edit_file(self, path: str, old: str, new: str) -> str:
         if self.mode == "plan":
@@ -810,6 +828,18 @@ class LiberAgent:
             await self._tui_cmd_restore(args, tui)
         elif cmd == "scratch":
             await self._tui_cmd_scratch(tui)
+        elif cmd == "search":
+            await self._tui_cmd_search(args, tui)
+        elif cmd == "pr":
+            await self._tui_cmd_pr(args, tui)
+        elif cmd == "review":
+            await self._tui_cmd_review(tui)
+        elif cmd == "test":
+            await self._tui_cmd_test(args, tui)
+        elif cmd == "lint":
+            await self._tui_cmd_lint(args, tui)
+        elif cmd == "config":
+            await self._tui_cmd_config(args, tui)
         else:
             tui.write_error(f"Unknown command: /{cmd}")
 
@@ -829,12 +859,8 @@ class LiberAgent:
         system   = self._system_prompt()
         t        = tui.theme_data
 
-        # Show AI header + thinking indicator immediately
+        # Show AI header immediately
         tui.render_ai_header(self.provider.name)
-        tui.write_output(Text(
-            "  ◐ thinking…\n",
-            Style(color=t["muted"])
-        ))
 
         full_response = ""
         queue: asyncio.Queue = asyncio.Queue()
@@ -910,6 +936,7 @@ class LiberAgent:
                 tui._render_tool_result(tool_name, tool_result)
 
         tui.refresh_status_bar()
+        tui.refresh_token_bar()
 
     async def handle_picker_selected(self, kind: str, value: str, tui) -> None:
         if kind == "model":
@@ -1352,6 +1379,9 @@ class LiberAgent:
         err = (stderr or b"").decode().strip()
         return (out + "\n" + err).strip() or "(no output)"
 
+    async def _run_git(self, *args: str) -> str:
+        return await self._run_git_async(*args)
+
     def _tui_write_git_output(self, title: str, output: str, tui) -> None:
         t = tui.theme_data
         tui.write_output(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
@@ -1365,3 +1395,415 @@ class LiberAgent:
             tui.write_output(Text(f"  {line}", Style(color=color)))
         self._tui_sep(tui)
         tui.write_output("\n")
+
+    # ── Feature 10: /search ──
+
+    async def _tui_cmd_search(self, query: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        if not query.strip():
+            tui.write_error("Usage: /search <term>")
+            return
+
+        q = query.strip().lower()
+
+        try:
+            history = self.store.history_get(self.session_id, limit=1000)
+        except Exception as e:
+            tui.write_error(f"Could not search history: {e}")
+            return
+
+        matches = [
+            msg for msg in history
+            if q in msg.get("content", "").lower()
+        ]
+
+        tui.write_output(Text(
+            f'\n  Search: "{query}"\n',
+            Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+
+        if not matches:
+            tui.write_output(Text(
+                f'  No results for "{query}"\n',
+                Style(color=t["muted"])
+            ))
+        else:
+            tui.write_output(Text(
+                f"  {len(matches)} result(s) found\n",
+                Style(color=t["accent"])
+            ))
+            for msg in matches[:10]:
+                role    = msg.get("role", "?")
+                content = msg.get("content", "")
+                ts      = str(msg.get("created_at", ""))[:16]
+
+                idx   = content.lower().find(q)
+                start = max(0, idx - 60)
+                end   = min(len(content), idx + len(q) + 60)
+                excerpt = ("…" if start > 0 else "") + \
+                          content[start:end] + \
+                          ("…" if end < len(content) else "")
+
+                line = Text()
+                line.append(f"  [{role}]", Style(
+                    color=t["secondary"] if role == "user" else t["primary"],
+                    bold=True
+                ))
+                line.append(f"  {ts}  ", Style(color=t["muted"]))
+
+                lo = excerpt.lower()
+                qi = lo.find(q)
+                if qi >= 0:
+                    line.append(excerpt[:qi],        Style(color=t["text"]))
+                    line.append(excerpt[qi:qi+len(q)], Style(
+                        color=t["bg"], bgcolor=t["accent"], bold=True
+                    ))
+                    line.append(excerpt[qi+len(q):], Style(color=t["text"]))
+                else:
+                    line.append(excerpt, Style(color=t["text"]))
+
+                tui.write_output(line)
+                tui.write_output(Text(""))
+
+        self._tui_sep(tui)
+
+    # ── Feature 16: /pr and /review ──
+
+    async def _tui_cmd_pr(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        if not self.git.is_repo():
+            tui.write_error("Not a git repository.")
+            return
+
+        branch = (await self._run_git("rev-parse", "--abbrev-ref", "HEAD")).strip()
+        if branch in ("main", "master", "HEAD"):
+            tui.write_error(
+                f"Current branch is '{branch}'. "
+                "Create a feature branch first."
+            )
+            return
+
+        base = "main"
+        base_check = (await self._run_git("rev-parse", "--verify", "main")).strip()
+        if base_check.startswith("fatal"):
+            base = "master"
+
+        log_raw = await self._run_git(
+            "log", f"{base}..HEAD", "--oneline", "--no-decorate"
+        )
+        diff_raw = await self._run_git("diff", f"{base}...HEAD", "--stat")
+
+        tui.write_info("Generating PR description…")
+        pr_prompt = (
+            f"Generate a GitHub pull request title and description for "
+            f"branch '{branch}' based on these commits:\n\n"
+            f"{log_raw}\n\nFiles changed:\n{diff_raw}\n\n"
+            "Format:\nTITLE: <title>\n\nBODY:\n<markdown body>"
+        )
+
+        import asyncio
+        import queue as _queue
+        q: asyncio.Queue = asyncio.Queue()
+
+        def _gen():
+            try:
+                for chunk in self.provider.chat_stream(
+                    [{"role": "user", "content": pr_prompt}],
+                    system="You are a helpful git assistant."
+                ):
+                    q.put_nowait(chunk)
+            except Exception as e:
+                q.put_nowait(e)
+            finally:
+                q.put_nowait(None)
+
+        asyncio.get_event_loop().run_in_executor(None, _gen)
+        full = ""
+        while True:
+            chunk = await q.get()
+            if chunk is None:
+                break
+            if isinstance(chunk, Exception):
+                tui.write_error(str(chunk))
+                return
+            full += chunk
+
+        title, body = branch, ""
+        if "TITLE:" in full:
+            parts = full.split("TITLE:", 1)[1]
+            lines = parts.strip().splitlines()
+            title = lines[0].strip()
+            if "BODY:" in full:
+                body = full.split("BODY:", 1)[1].strip()
+
+        tui.write_output(Text(f"\n  PR Title:  {title}\n",
+                              Style(color=t["primary"], bold=True)))
+        if body:
+            tui.write_output(Text(f"  Body preview:\n  {body[:200]}\n",
+                                  Style(color=t["muted"])))
+
+        confirmed = await tui.ask_confirm("Push branch and open PR?")
+        if not confirmed:
+            tui.write_info("PR cancelled.")
+            return
+
+        push_out = await self._run_git("push", "-u", "origin", branch)
+        tui.write_output(Text(f"  {push_out}\n", Style(color=t["muted"])))
+
+        body_escaped = body.replace('"', '\\"').replace('\n', '\\n')
+        gh_cmd = (
+            f'gh pr create --title "{title}" '
+            f'--body "{body_escaped[:500]}" --base {base}'
+        )
+        tui._render_tool_result("shell", gh_cmd)
+
+        push_result = await self._run_git(
+            *(gh_cmd.split())
+        )
+        if "https://github.com" in push_result:
+            url = [w for w in push_result.split() if w.startswith("https://")][0]
+            tui.write_output(Text(
+                f"\n  ✓ PR created: {url}\n",
+                Style(color=t["success"], bold=True)
+            ))
+        else:
+            tui.write_output(Text(
+                f"\n  Pushed. Run:\n  {gh_cmd}\n",
+                Style(color=t["accent"])
+            ))
+
+    async def _tui_cmd_review(self, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        if not self.git.is_repo():
+            tui.write_error("Not a git repository.")
+            return
+
+        diff = await self._run_git("diff", "HEAD")
+        if not diff.strip():
+            diff = await self._run_git("diff", "--cached")
+        if not diff.strip():
+            tui.write_error("No uncommitted changes to review.")
+            return
+
+        tui.write_info("Reviewing current diff…")
+        review_prompt = (
+            "Review the following git diff. List:\n"
+            "1. Potential bugs or issues\n"
+            "2. Code quality suggestions\n"
+            "3. Security concerns (if any)\n"
+            "4. What looks good\n\n"
+            f"```diff\n{diff[:6000]}\n```"
+        )
+        await self.handle_tui_message(review_prompt, tui)
+
+    # ── Feature 17: /test and /lint ──
+
+    def _detect_project_type(self) -> str:
+        root = Path(self.shell.workdir)
+        if (root / "Cargo.toml").exists():        return "rust"
+        if (root / "package.json").exists():      return "node"
+        if (root / "pyproject.toml").exists():    return "python"
+        if (root / "setup.py").exists():          return "python"
+        if (root / "requirements.txt").exists():  return "python"
+        if (root / "go.mod").exists():            return "go"
+        if (root / "pom.xml").exists():           return "java"
+        return "unknown"
+
+    async def _run_cmd(self, *args: str) -> str:
+        import asyncio
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=self.shell.workdir,
+            )
+            stdout, _ = await proc.communicate()
+            return stdout.decode("utf-8", errors="replace").strip() or "(no output)"
+        except FileNotFoundError:
+            return f"Command not found: {args[0]}"
+        except Exception as e:
+            return f"Error running {args[0]}: {e}"
+
+    async def _tui_cmd_test(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        project = self._detect_project_type()
+        cmd_map = {
+            "python": ["python", "-m", "pytest", "--tb=short", "-q"],
+            "node":   ["npx", "jest", "--no-coverage"],
+            "rust":   ["cargo", "test"],
+            "go":     ["go", "test", "./..."],
+            "java":   ["mvn", "test", "-q"],
+        }
+
+        cmd_args = cmd_map.get(project)
+        if args.strip():
+            cmd_args = args.strip().split()
+        if not cmd_args:
+            tui.write_error(
+                f"Unknown project type '{project}'. "
+                "Provide a command: /test pytest tests/"
+            )
+            return
+
+        tui.write_info(f"Running: {' '.join(cmd_args)}")
+        output = await self._run_cmd(*cmd_args)
+        tui._render_tool_result("shell", output)
+
+        if any(kw in output.lower() for kw in ["error", "failed", "failure", "assert"]):
+            tui.write_info("Summarising failures…")
+            summary_prompt = (
+                "Summarise only the test failures from this test output. "
+                "For each failure, state what failed and suggest a fix.\n\n"
+                f"```\n{output[:4000]}\n```"
+            )
+            await self.handle_tui_message(summary_prompt, tui)
+
+    async def _tui_cmd_lint(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        project = self._detect_project_type()
+        cmd_map = {
+            "python": ["ruff", "check", "."],
+            "node":   ["npx", "eslint", ".", "--max-warnings=0"],
+            "rust":   ["cargo", "clippy", "--", "-D", "warnings"],
+            "go":     ["golangci-lint", "run"],
+        }
+
+        cmd_args = cmd_map.get(project)
+        if args.strip():
+            cmd_args = args.strip().split()
+        if not cmd_args:
+            tui.write_error(
+                f"Unknown project type '{project}'. "
+                "Provide a command: /lint ruff check ."
+            )
+            return
+
+        tui.write_info(f"Running: {' '.join(cmd_args)}")
+        output = await self._run_cmd(*cmd_args)
+        tui._render_tool_result("shell", output)
+
+        if output.strip() and "no issues" not in output.lower():
+            tui.write_info("Asking agent to fix lint issues…")
+            fix_prompt = (
+                "Here are the linter warnings. "
+                "For each issue, explain what the problem is and how to fix it. "
+                "Show the corrected code snippet for the top 5 issues.\n\n"
+                f"```\n{output[:4000]}\n```"
+            )
+            await self.handle_tui_message(fix_prompt, tui)
+
+    # ── Feature 18: /config ──
+
+    async def _tui_cmd_config(self, args: str, tui) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        from pathlib import Path
+        t = tui.theme_data
+
+        config_path = Path(
+            self.config.config_file
+            if hasattr(self.config, "config_file")
+            else Path.home() / ".config" / "libercode" / "config.toml"
+        )
+
+        if "=" in args:
+            key, val = args.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            await self._tui_config_set(config_path, key, val, tui)
+            return
+
+        tui.write_output(Text(
+            "\n  Configuration\n", Style(color=t["primary"], bold=True)
+        ))
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            f"  File: {config_path}\n", Style(color=t["muted"])
+        ))
+        self._tui_sep(tui)
+
+        if not config_path.exists():
+            tui.write_output(Text(
+                "  Config file not found. Using defaults.\n",
+                Style(color=t["muted"])
+            ))
+        else:
+            try:
+                raw = config_path.read_text(encoding="utf-8")
+                from rich.syntax import Syntax
+                tui.write_output(Syntax(
+                    raw, "toml",
+                    theme="dracula",
+                    line_numbers=True,
+                    background_color=t["bg_panel"],
+                ))
+            except Exception as e:
+                tui.write_error(f"Could not read config: {e}")
+
+        self._tui_sep(tui)
+        tui.write_output(Text(
+            "  Usage: /config key = value\n"
+            "  Example: /config provider.model = deepseek-coder-v2\n",
+            Style(color=t["muted"])
+        ))
+
+    async def _tui_config_set(
+        self, config_path, key: str, val: str, tui
+    ) -> None:
+        from rich.text import Text
+        from rich.style import Style
+        t = tui.theme_data
+
+        try:
+            import tomllib
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except ImportError:
+            try:
+                import toml
+                data = toml.load(str(config_path)) if config_path.exists() else {}
+            except Exception:
+                data = {}
+        except Exception:
+            data = {}
+
+        parts = key.split(".")
+        node  = data
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = val
+
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                import toml
+                config_path.write_text(
+                    toml.dumps(data), encoding="utf-8"
+                )
+            except ImportError:
+                pass
+
+            tui.write_output(Text(
+                f"\n  ✓ {key} = {val}\n"
+                "  Restart libercode for changes to take effect.\n",
+                Style(color=t["success"], bold=True)
+            ))
+        except Exception as e:
+            tui.write_error(f"Could not write config: {e}")
