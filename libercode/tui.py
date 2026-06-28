@@ -300,6 +300,23 @@ class ProviderModal(ModalScreen):
             )
 
     def on_mount(self) -> None:
+        t = self.app.theme_data
+        try:
+            container = self.query_one("#provider-modal-container")
+            container.styles.background = t["bg_panel"]
+            container.styles.border = ("round", t["primary"])
+            title = self.query_one("#provider-modal-title")
+            title.styles.background = t["primary"]
+            title.styles.color = t["bg"]
+            search = self.query_one("#modal-search", Input)
+            search.styles.background = t["bg_input"]
+            search.styles.color = t["text"]
+            search.styles.border_bottom = ("solid", t["border"])
+            footer = self.query_one("#provider-modal-footer")
+            footer.styles.background = t["bg"]
+            footer.styles.color = t["muted"]
+        except Exception:
+            pass
         self._rebuild_list()
         self.query_one("#modal-search", Input).focus()
 
@@ -467,6 +484,23 @@ class ModelModal(ModalScreen):
             )
 
     def on_mount(self) -> None:
+        t = self.app.theme_data
+        try:
+            container = self.query_one("#provider-modal-container")
+            container.styles.background = t["bg_panel"]
+            container.styles.border = ("round", t["primary"])
+            title = self.query_one("#provider-modal-title")
+            title.styles.background = t["primary"]
+            title.styles.color = t["bg"]
+            search = self.query_one("#model-search", Input)
+            search.styles.background = t["bg_input"]
+            search.styles.color = t["text"]
+            search.styles.border_bottom = ("solid", t["border"])
+            footer = self.query_one("#provider-modal-footer")
+            footer.styles.background = t["bg"]
+            footer.styles.color = t["muted"]
+        except Exception:
+            pass
         self._rebuild_list()
         self.query_one("#model-search", Input).focus()
 
