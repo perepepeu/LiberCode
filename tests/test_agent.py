@@ -32,7 +32,6 @@ def make_agent(tmpdir):
     agent.stop_checker = MagicMock()
     agent.console = MagicMock()
     agent.tui_ui = None
-    agent.available_models = []
     agent.VALID_MODES = ["build", "plan", "spec", "debug"]
     return agent
 
