@@ -2297,12 +2297,6 @@ class LibercodeUI(App):
 
         self._switch_provider_then_model(provider_display_name)
 
-        try:
-            self.query_one("#prompt-input", Input).blur()
-        except Exception:
-            pass
-        self.push_screen(modal, _on_model_dismiss)
-
     def open_model_modal(self) -> None:
         """Open ModelModal for the current provider."""
         agent = self._agent
