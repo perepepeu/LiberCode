@@ -30,47 +30,37 @@ Expected current result: failing lint until cleanup is done.
 
 | Test File | Covers | Notable Gaps |
 | --- | --- | --- |
-| `tests/test_shell.py` | Basic shell execution, timeout, read/write/edit/list, simple forbidden command patterns | Path traversal in `ShellExecutor`, shell injection policy, direct file containment. |
-| `tests/test_agent.py` | Tool-call parsing, basic path traversal checks through mocked shell, message truncation | Real file path behavior, plan-mode write blocking, TUI command handlers. |
-| `tests/test_slash_commands.py` | Legacy slash commands using mocked agent dependencies | TUI slash commands, missing `_tui_cmd_memory`, `/provider`, `/pr`, `/restore`. |
+| `tests/test_shell.py` | Basic shell execution, timeout, read/write/edit/list, simple forbidden command patterns, direct path containment | Shell injection policy and richer command authorization. |
+| `tests/test_agent.py` | Tool-call parsing, path traversal checks, plan-mode write blocking, safe restore helper, message truncation | Broader real-provider and real-session behavior. |
+| `tests/test_slash_commands.py` | Legacy slash commands, TUI `/memory`, TUI `/pr` external `gh` invocation | TUI provider modal flows, `/restore` end-to-end rendering. |
 | `tests/test_checkpoint.py` | Snapshot save/list shape, file limits, git diff snapshot | Restore behavior, non-Python files, path validation, corrupted snapshot data. |
-| `tests/test_git_utils.py` | Non-repo behavior, simple branch regex checks | Validating real Git ref rules inside an initialized repo. |
+| `tests/test_git_utils.py` | Non-repo behavior, branch regex checks, `git check-ref-format` validation | More branch edge cases and worktree scenarios. |
 | `tests/test_providers.py` | Retry helper behavior | Provider payload shapes, streaming parsing, provider config save/load. |
+| `tests/test_config.py` | Provider YAML save/load round-trip | Project-level `.libercoderc` overlay edge cases. |
+| `tests/test_entrypoint.py` | Installed entry point routing and agent-backed TUI startup | Console script invocation in a packaged environment. |
 
 ## High-Value Tests to Add
 
-1. Entry point smoke tests:
-   - `python -m libercode --version` or equivalent console entry simulation.
-   - Installed script target resolves to the intended main.
-   - Default startup attaches a `LiberAgent` when TUI is used.
-
-2. CLI tests:
+1. CLI tests:
    - `libercode exec` reaches `LiberAgent.run_one_shot`.
    - `libercode config --show` reads YAML.
    - `libercode show --summary` uses the store safely.
 
-3. Config/provider tests:
-   - Provider switch persists to the same format that `LiberConfig.load()` reads.
-   - Missing optional TOML packages do not silently drop provider settings.
+2. Config/provider tests:
    - Saved provider keys are masked in UI output.
+   - Project-level `.libercoderc` overlays provider fields without corrupting saved global provider entries.
 
-4. TUI command dispatch tests:
+3. TUI command dispatch tests:
    - Every command in `tui.py` `COMMANDS` has a handler or UI action.
-   - `/memory` does not raise.
-   - `/mode debug` works consistently.
+   - Provider modal setup flow saves and reloads API keys.
 
-5. File safety tests:
-   - Direct `ShellExecutor.read_file("../outside.txt")` is blocked.
-   - Direct `ShellExecutor.write_file("../outside.txt", ...)` is blocked.
+4. File safety tests:
    - Symlink/junction escape behavior is blocked where supported.
 
-6. Git/PR tests:
-   - Branch validation rejects invalid refs inside a real temporary Git repo.
-   - `/pr` invokes `gh` without prefixing `git`.
+5. Git/PR tests:
    - PR body quoting preserves spaces, quotes, and newlines.
 
-7. Checkpoint tests:
-   - Shared restore function blocks traversal paths.
+6. Checkpoint tests:
    - Restore handles malformed snapshots gracefully.
 
 ## Lint Cleanup Strategy
@@ -98,4 +88,3 @@ After startup/config fixes, verify:
 - TUI `/test`
 - TUI `/lint`
 - TUI provider picker opens
-

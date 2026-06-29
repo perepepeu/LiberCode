@@ -21,7 +21,7 @@ Run from the repository root:
 python -m pytest -q
 ```
 
-Current result: 57 passed.
+Current focused checks have been expanded for entrypoint, config, mode, memory, path containment, branch validation, and PR creation. Run the full suite before release.
 
 ```bash
 python -m compileall -q libercode tests
@@ -33,7 +33,7 @@ Current result: passed.
 ruff check .
 ```
 
-Current result: failed with 91 lint findings, 50 auto-fixable. Most are cleanup, but there are meaningful static-quality signals such as an unresolved `BaseProvider` type annotation in `libercode/agent.py`.
+Previous result: failed with 91 lint findings, 50 auto-fixable. Some meaningful issues have been fixed, but run `ruff check .` again before release.
 
 ## Read These First
 
@@ -50,21 +50,18 @@ Current result: failed with 91 lint findings, 50 auto-fixable. Most are cleanup,
 
 ## Important Gotchas
 
-- The installed `libercode` entry point currently targets `libercode.__main__:main`, but `__main__.py` creates a TUI app without attaching a `LiberAgent`. The direct `libercode/tui.py` script path does attach an agent.
-- `cli.py` implements `exec`, `config`, `show`, `wizard`, and `mode`, but the package entry point does not route to `cli.main`.
-- Config is split between YAML and TOML paths. Main config uses `~/.config/libercode/config.yaml`; newer provider/config UI code references `config.toml`.
-- `tomli_w` and `toml` are used in provider/config paths but are not installed dependencies in the current editable environment.
-- TUI `/memory` dispatches to `_tui_cmd_memory`, but no such method exists in `libercode/agent.py`.
-- The `/pr` implementation builds a `gh pr create` command and then sends it through a Git helper that prefixes `git`, so it is likely to execute as `git gh pr create ...`.
-- The shell sandbox is denylist-based and uses `shell=True`. File path validation is inconsistent across `LiberAgent` and `ShellExecutor`.
+- The installed `libercode` entry point now routes argument-based usage to `cli.main()` and starts a TUI with `LiberAgent` attached when no arguments are passed.
+- Config persistence is YAML-only through `~/.config/libercode/config.yaml`; provider save/load now round-trips through `LiberConfig`.
+- TUI `/memory` has an async handler in `LiberAgent`.
+- TUI `/pr` now invokes `gh pr create` through an external command helper instead of the Git helper.
+- `ShellExecutor` now blocks path traversal for file read/write/list/search before touching the filesystem.
+- The shell sandbox is still denylist-based and uses `shell=True`; this remains a security improvement area.
 - `MagicMock/` is ignored test/workspace debris. Do not treat it as product source.
 
-## Suggested First Repair Sequence
+## Suggested Next Repair Sequence
 
-1. Fix startup routing and agent attachment.
-2. Normalize config persistence to one format.
-3. Fix missing TUI command handlers and command-surface drift.
-4. Harden file/shell safety boundaries.
-5. Split `agent.py` and `tui.py` into smaller command/provider/session modules.
-6. Add integration tests for installed entry point, TUI command dispatch, provider save/load, path traversal, and PR creation.
-
+1. Reduce `shell=True` exposure or add explicit confirmation/policy controls for arbitrary shell execution.
+2. Split `agent.py` and `tui.py` into smaller command/provider/session modules.
+3. Replace broad silent exception handling with debug logging or UI-visible warnings.
+4. Run safe lint auto-fixes, then manually resolve remaining lint errors.
+5. Add broader integration tests for TUI provider modal flows and session import/export.

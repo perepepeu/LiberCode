@@ -8,24 +8,15 @@ Current installed console script:
 pyproject.toml
   -> libercode = "libercode.__main__:main"
   -> libercode/__main__.py main()
-  -> LiberConfig.load()
-  -> LibercodeUI(...)
-  -> app.run()
-```
-
-Problem: this path never creates `LiberAgent` and never calls `app.set_agent(agent)`. As a result, the installed `libercode` command opens a TUI that is not connected to the agent.
-
-The direct script path at the bottom of `libercode/tui.py` does this correctly:
-
-```text
-ensure_config()
+  -> if arguments are present: libercode.cli.main()
+  -> else: ensure_config()
   -> LiberAgent(cfg)
   -> LibercodeUI(...)
   -> app.set_agent(agent)
   -> app.run()
 ```
 
-The argparse CLI path exists separately:
+The argparse CLI path:
 
 ```text
 libercode/cli.py main()
@@ -35,8 +26,6 @@ libercode/cli.py main()
   -> LiberAgent(cfg)
   -> run_interactive() or run_one_shot() or config/show action
 ```
-
-Recommended repair: make `libercode.__main__:main` delegate to `libercode.cli.main`, then make the default no-command branch start the properly wired TUI or interactive flow.
 
 ## TUI Message Flow
 
@@ -62,7 +51,6 @@ Key files:
 
 Known gaps:
 
-- Missing `_tui_cmd_memory`.
 - Many broad `except Exception: pass` blocks in the TUI can hide failures.
 - Some async worker paths update UI and provider state without a single shared command contract.
 
@@ -77,13 +65,13 @@ User enters "/command args"
 
 Current command list lives in `libercode/tui.py` as `COMMANDS`.
 
-Important command risks:
+Important command notes:
 
-- `/memory`: routed but missing handler.
+- `/memory`: has an async handler and focused dispatch test.
 - `/provider`: opens a modal for empty/list/setup; direct switching uses `_tui_provider_direct_switch`.
-- `/config`: reads and writes a TOML path, while the main app loads YAML.
-- `/pr`: uses Git helper to run a GitHub CLI command, likely producing `git gh pr create`.
-- `/restore`: validates restored paths with `is_relative_to`; legacy `/undo` does not.
+- `/config`: reads and writes the same YAML config loaded by `LiberConfig`.
+- `/pr`: uses a dedicated external command helper for `gh pr create`.
+- `/restore` and legacy `/undo`: share path-contained snapshot restore logic.
 
 ## Legacy Interactive Slash Command Flow
 
@@ -98,7 +86,6 @@ This surface supports a smaller and different command set than the TUI. It handl
 
 Known drift:
 
-- Legacy `/undo` restores checkpoint files without the same path containment check used by TUI `/restore`.
 - Legacy `/mode` only prints the current mode, while TUI `/mode` changes modes.
 
 ## Model Tool Call Flow
@@ -136,12 +123,12 @@ agent._process_tool_call(response)
   -> shell/file/git/task/checkpoint/memory/scratch/subagent method
 ```
 
-Mode restrictions are not uniform:
+Mode restrictions:
 
 - `_exec_shell()` blocks plan mode.
 - `_edit_file()` blocks plan mode.
-- `_write_file()` does not explicitly block plan mode.
-- Tool `mode` only accepts `build`, `plan`, and `spec`, not `debug`.
+- `_write_file()` blocks plan mode.
+- Tool `mode` accepts every mode in `VALID_MODES`.
 
 ## File and Shell Flow
 
@@ -159,11 +146,13 @@ Files:
 ```text
 agent._read_file(path)
   -> ShellExecutor.read_file(path)
-  -> agent validates returned real path
+  -> ShellExecutor validates path containment before reading
+  -> agent performs a second containment check
 ```
 
 ```text
 agent._write_file(path, content)
+  -> agent blocks plan mode
   -> agent validates path
   -> compute diff
   -> optional TUI confirmation
@@ -172,7 +161,7 @@ agent._write_file(path, content)
   -> optional checkpoint
 ```
 
-Security note: `ShellExecutor` itself does not consistently enforce path containment. Put containment checks close to file I/O, not only in callers.
+Security note: file containment is enforced in `ShellExecutor`; arbitrary shell commands still use `shell=True` with a denylist and need further policy work.
 
 ## Config Flow
 
@@ -199,17 +188,15 @@ TUI provider/config paths:
 
 ```text
 agent._tui_cmd_config()
-  -> path ~/.config/libercode/config.toml
-  -> tomllib/toml parsing
+  -> path ~/.config/libercode/config.yaml
+  -> YAML parsing
 ```
 
 ```text
 LiberConfig.save_provider_config()
-  -> path ~/.config/libercode/config.toml
-  -> tomli_w dump
+  -> update provider and providers entries
+  -> save ~/.config/libercode/config.yaml
 ```
-
-Problem: TOML writer packages are not current dependencies, and `LiberConfig.load()` does not read this TOML file.
 
 ## Provider Flow
 
@@ -284,8 +271,8 @@ Snapshot limits:
 
 Restore paths:
 
-- TUI `/restore` checks `is_relative_to`.
-- Legacy `/undo` does not perform the same check.
+- TUI `/restore` and legacy `/undo` both use `LiberAgent._restore_snapshot_files()`.
+- Restore blocks paths that escape `self.shell.workdir`.
 
 ## Test and Lint Flow
 
@@ -311,4 +298,3 @@ For this repo:
 
 - Test command: `python -m pytest --tb=short -q`
 - Lint command: `ruff check .`
-

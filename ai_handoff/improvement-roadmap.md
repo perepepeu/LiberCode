@@ -2,74 +2,21 @@
 
 This roadmap is ordered for low rework and high confidence.
 
-## Phase 1: Make Startup Honest
+## Completed: Startup, Config, Commands, and Core Safety
 
-Goal: the documented commands should reach the code that implements them.
+These items were addressed after the initial audit:
 
-Tasks:
+- Installed entry point routes intentionally and starts an agent-backed TUI by default.
+- Provider and UI config persistence use YAML through `LiberConfig`.
+- `VALID_MODES` is centralized and includes `debug` everywhere relevant.
+- TUI `/memory` has an async handler.
+- `ShellExecutor` blocks file path traversal before read/write/list/search.
+- Plan mode blocks file writes.
+- `/undo` and `/restore` share safe snapshot restore logic.
+- `/pr` uses `gh pr create` through an external command helper.
+- Branch validation uses `git check-ref-format --branch`.
 
-- Change the package entry point or `libercode/__main__.py` so installed `libercode` routes intentionally.
-- If default behavior is TUI, create `LiberAgent(cfg)` and call `app.set_agent(agent)`.
-- If argparse is the main entry, delegate to `libercode.cli.main()`.
-- Add smoke tests for entry-point routing.
-
-Acceptance:
-
-- `libercode --version` prints the package version.
-- `libercode exec "..."` calls the one-shot path.
-- Default `libercode` starts an agent-connected UI.
-
-## Phase 2: Unify Configuration
-
-Goal: there is one source of truth for user config.
-
-Tasks:
-
-- Pick YAML or TOML.
-- Make load/save/provider-switch paths use the same file.
-- Remove undeclared dependencies or add them to `pyproject.toml`.
-- Stop swallowing provider config save failures silently.
-
-Acceptance:
-
-- Switching provider persists and survives process restart.
-- `config --show`, TUI `/config`, and provider modal show the same state.
-- Tests cover missing optional config writer packages.
-
-## Phase 3: Align Commands
-
-Goal: one command registry, multiple renderers.
-
-Tasks:
-
-- Define commands and metadata once.
-- Implement shared command services for memory/tasks/checkpoints/mode/provider.
-- Make CLI, legacy interactive, and TUI call the same behavior where possible.
-- Implement missing `_tui_cmd_memory`.
-
-Acceptance:
-
-- Every advertised command has a tested handler.
-- `debug` mode works across CLI, TUI, wizard, model tools, and UI colors.
-
-## Phase 4: Harden Tool Safety
-
-Goal: security boundaries are enforced in the lowest practical layer.
-
-Tasks:
-
-- Add path containment checks inside `ShellExecutor` file methods.
-- Replace string-prefix checks with `Path.resolve().is_relative_to(...)`.
-- Consider a safer command execution API for non-arbitrary commands.
-- Add explicit confirmation or policy controls for arbitrary shell execution.
-
-Acceptance:
-
-- Direct `ShellExecutor` traversal tests fail closed.
-- Plan mode cannot write files through any tool path unless explicitly designed.
-- Shell command policy is documented and tested.
-
-## Phase 5: Split Large Files
+## Phase 1: Split Large Files
 
 Goal: reduce blast radius.
 
@@ -97,7 +44,7 @@ Acceptance:
 - New modules have focused unit tests.
 - `agent.py` and `tui.py` stop being the default home for every new behavior.
 
-## Phase 6: Improve Observability
+## Phase 2: Improve Observability
 
 Goal: failures should be visible without overwhelming users.
 
@@ -112,3 +59,31 @@ Acceptance:
 - Provider switch failure explains whether it was validation, missing API key, config save, or model fetch.
 - TUI worker exceptions are visible in a controlled way.
 
+## Phase 3: Finish Lint Baseline
+
+Goal: make static checks useful enough for CI.
+
+Tasks:
+
+- Run `ruff check . --fix` and review the diff.
+- Manually handle remaining issues, especially unused imports, redefinitions, broad one-line conditionals, and ambiguous variables.
+- Add a lint command to CI once the baseline is clean.
+
+Acceptance:
+
+- `ruff check .` exits 0.
+- The full test suite still passes after lint cleanup.
+
+## Phase 4: Tighten Shell Policy
+
+Goal: reduce risk from arbitrary shell commands.
+
+Tasks:
+
+- Prefer argument-list execution for known commands.
+- Add user confirmation or policy gates for arbitrary shell execution.
+- Document allowed, blocked, and confirmation-required command classes.
+
+Acceptance:
+
+- Shell execution behavior is predictable and tested beyond substring denylisting.
