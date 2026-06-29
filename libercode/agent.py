@@ -1009,7 +1009,7 @@ class LiberAgent:
                         f"\n  ✓ Setup complete!\n"
                         f"  Provider: {provider}\n"
                         f"  Model:    {value}\n"
-                        f"  Config saved to config.toml\n",
+                        f"  Config saved to config.yaml\n",
                         Style(color=tui.theme_data["success"], bold=True)
                     ))
                     tui.update_model_badge_from_thread(
@@ -1788,14 +1788,10 @@ class LiberAgent:
     async def _tui_cmd_config(self, args: str, tui) -> None:
         from rich.text import Text
         from rich.style import Style
-        from pathlib import Path
+        from libercode.config import GLOBAL_CONFIG_PATH
         t = tui.theme_data
 
-        config_path = Path(
-            self.config.config_file
-            if hasattr(self.config, "config_file")
-            else Path.home() / ".config" / "libercode" / "config.toml"
-        )
+        config_path = GLOBAL_CONFIG_PATH
 
         if "=" in args:
             key, val = args.split("=", 1)
@@ -1823,7 +1819,7 @@ class LiberAgent:
                 raw = config_path.read_text(encoding="utf-8")
                 from rich.syntax import Syntax
                 tui.write_output(Syntax(
-                    raw, "toml",
+                    raw, "yaml",
                     theme="dracula",
                     line_numbers=True,
                     background_color=t["bg_panel"],
@@ -1843,19 +1839,13 @@ class LiberAgent:
     ) -> None:
         from rich.text import Text
         from rich.style import Style
+        import yaml
         t = tui.theme_data
 
-        try:
-            import tomllib
-            with open(config_path, "rb") as f:
-                data = tomllib.load(f)
-        except ImportError:
-            try:
-                import toml
-                data = toml.load(str(config_path)) if config_path.exists() else {}
-            except Exception:
-                data = {}
-        except Exception:
+        if config_path.exists():
+            with open(config_path) as f:
+                data = yaml.safe_load(f) or {}
+        else:
             data = {}
 
         parts = key.split(".")
@@ -1866,13 +1856,8 @@ class LiberAgent:
 
         try:
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                import toml
-                config_path.write_text(
-                    toml.dumps(data), encoding="utf-8"
-                )
-            except ImportError:
-                pass
+            with open(config_path, "w") as f:
+                yaml.dump(data, f, default_flow_style=False)
 
             tui.write_output(Text(
                 f"\n  ✓ {key} = {val}\n"

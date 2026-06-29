@@ -37,23 +37,25 @@ LiberCode supports multiple AI providers through a unified interface. Each provi
 /provider setup
 ```
 
-## config.toml Example
+## config.yaml Example
 
-```toml
-[provider]
-name = "openai"
-model = "gpt-4o"
+```yaml
+provider:
+  name: openai
+  model: gpt-4o
 
-[providers.openai]
-api_key = "sk-..."
-model = "gpt-4o"
-
-[providers.anthropic]
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-5"
-
-[providers.groq]
-api_key = "gsk_..."
+providers:
+  openai:
+    name: openai
+    api_key: sk-...
+    model: gpt-4o
+  anthropic:
+    name: anthropic
+    api_key: sk-ant-...
+    model: claude-sonnet-4-5
+  groq:
+    name: groq
+    api_key: gsk_...
 ```
 
 ## Environment Variables

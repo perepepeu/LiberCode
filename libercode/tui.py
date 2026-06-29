@@ -1944,16 +1944,11 @@ class LibercodeUI(App):
 
     def _save_theme(self, name: str) -> None:
         try:
-            from libercode.config import LiberConfig, GLOBAL_CONFIG_PATH
-            import yaml
-            if GLOBAL_CONFIG_PATH.exists():
-                with open(GLOBAL_CONFIG_PATH) as f:
-                    raw = yaml.safe_load(f) or {}
-            else:
-                raw = {}
-            raw["theme"] = name
-            with open(GLOBAL_CONFIG_PATH, "w") as f:
-                yaml.dump(raw, f, default_flow_style=False)
+            from libercode.config import LiberConfig
+
+            cfg = LiberConfig.load()
+            cfg.theme = name
+            cfg.save_global()
         except Exception:
             pass
 
@@ -2395,7 +2390,6 @@ class LibercodeUI(App):
                 return
             async def _do_swap():
                 try:
-                    from libercode.providers.registry import build_provider
                     from libercode.config import LiberConfig
                     saved_key = ""
                     try:
@@ -2405,10 +2399,11 @@ class LibercodeUI(App):
                             saved_key = entry.get("api_key", "") if isinstance(entry, dict) else getattr(entry, "api_key", "")
                     except Exception:
                         pass
-                    new_provider = build_provider(
-                        provider_key, model=model_name, api_key=saved_key
+                    agent.swap_provider(
+                        name=provider_key,
+                        model=model_name,
+                        api_key=saved_key,
                     )
-                    agent.provider = new_provider
                     self.current_model = model_name
                     self.watch_current_model(model_name)
                     self.update_model_badge_from_thread(model_name)
@@ -2437,18 +2432,10 @@ class LibercodeUI(App):
             provider_key = provider_display_name.lower()
 
         try:
-            from libercode.config import LiberConfig, GLOBAL_CONFIG_PATH
-            import yaml
-            if GLOBAL_CONFIG_PATH.exists():
-                with open(GLOBAL_CONFIG_PATH) as f:
-                    raw = yaml.safe_load(f) or {}
-            else:
-                raw = {}
-            raw.setdefault("providers", {})
-            raw["providers"].setdefault(provider_key, {})
-            raw["providers"][provider_key]["api_key"] = api_key
-            with open(GLOBAL_CONFIG_PATH, "w") as f:
-                yaml.dump(raw, f, default_flow_style=False)
+            from libercode.config import LiberConfig
+
+            cfg = LiberConfig.load()
+            cfg.save_provider_config(provider_key, api_key=api_key, set_active=False)
             self.write_info(f"{provider_display_name.upper()} API key saved.")
         except Exception as e:
             self.write_error(f"Failed to save API key: {e}")

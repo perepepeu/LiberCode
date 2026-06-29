@@ -1,9 +1,7 @@
 import os
-import sys
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
 
 CONFIG_DIR = Path.home() / ".config" / "libercode"
 GLOBAL_CONFIG_PATH = CONFIG_DIR / "config.yaml"
@@ -77,6 +75,19 @@ class ProviderConfig:
         )
 
 
+def _provider_from_dict(value) -> ProviderConfig:
+    if isinstance(value, ProviderConfig):
+        return value
+    if isinstance(value, dict):
+        allowed = {
+            key: val
+            for key, val in value.items()
+            if key in ProviderConfig.__dataclass_fields__
+        }
+        return ProviderConfig(**allowed)
+    return ProviderConfig()
+
+
 @dataclass
 class LiberConfig:
     provider: ProviderConfig = field(default_factory=ProviderConfig.builtin_defaults)
@@ -100,9 +111,14 @@ class LiberConfig:
     def from_dict(cls, d: dict):
         d = dict(d)
         provider_dict = d.pop("provider", {})
+        providers_dict = d.pop("providers", {})
         cfg = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
         if provider_dict:
-            cfg.provider = ProviderConfig(**provider_dict)
+            cfg.provider = _provider_from_dict(provider_dict)
+        cfg.providers = {
+            name: _provider_from_dict(value)
+            for name, value in providers_dict.items()
+        }
         return cfg
 
     def to_dict(self):
@@ -133,67 +149,40 @@ class LiberConfig:
         return cfg
 
     def save_global(self):
+        import stat
+
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        if self.provider.api_key:
-            import stat
-            config_path = str(GLOBAL_CONFIG_PATH)
-            with open(config_path, "w") as f:
-                yaml.dump(self.to_dict(), f, default_flow_style=False)
-            try:
-                os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass
-        else:
-            with open(GLOBAL_CONFIG_PATH, "w") as f:
-                yaml.dump(self.to_dict(), f, default_flow_style=False)
+        config_path = str(GLOBAL_CONFIG_PATH)
+        with open(config_path, "w") as f:
+            yaml.dump(self.to_dict(), f, default_flow_style=False)
+        try:
+            os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
 
     def save_provider_config(
         self,
         provider_name: str,
-        api_key:       str  = "",
-        model:         str  = "",
-        api_base:      str  = "",
-        set_active:    bool = True,
+        api_key: str = "",
+        model: str = "",
+        api_base: str = "",
+        set_active: bool = True,
     ) -> None:
-        import tempfile, shutil
-
-        config_path = Path(
-            self.config_file
-            if hasattr(self, "config_file")
-            else Path.home() / ".config" / "libercode" / "config.toml"
-        )
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            with open(config_path, "rb") as f:
-                data = __import__("tomllib").load(f)
-        except Exception:
-            data = {}
-
-        data.setdefault("providers", {})
-        data["providers"].setdefault(provider_name, {})
+        entry = _provider_from_dict(self.providers.get(provider_name, {}))
+        entry.name = provider_name
         if api_key:
-            data["providers"][provider_name]["api_key"] = api_key
+            entry.api_key = api_key
         if model:
-            data["providers"][provider_name]["model"] = model
+            entry.model = model
         if api_base:
-            data["providers"][provider_name]["api_base"] = api_base
-        if set_active:
-            data.setdefault("provider", {})
-            data["provider"]["name"] = provider_name
-            if model:
-                data["provider"]["model"] = model
+            entry.api_base = api_base
 
-        tmp = config_path.with_suffix(".tmp")
-        try:
-            import tomli_w
-            with open(tmp, "wb") as f:
-                tomli_w.dump(data, f)
-            shutil.move(str(tmp), str(config_path))
-        except Exception as e:
-            if tmp.exists():
-                tmp.unlink()
-            raise e
+        self.providers[provider_name] = entry
+        if set_active:
+            self.active_provider = provider_name
+            self.provider = entry
+
+        self.save_global()
 
 
 def first_run_wizard():
