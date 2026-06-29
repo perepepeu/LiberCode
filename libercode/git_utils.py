@@ -28,6 +28,12 @@ class GitHelper:
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e), "exit_code": -1}
 
+    def is_valid_branch_name(self, branch: str) -> bool:
+        if not branch or not VALID_BRANCH_RE.match(branch):
+            return False
+        result = self._run(["check-ref-format", "--branch", branch])
+        return result["success"]
+
     def is_repo(self) -> bool:
         return self._run(["rev-parse", "--git-dir"])["success"]
 
@@ -73,12 +79,12 @@ class GitHelper:
         return self._run(["diff", base])
 
     def checkout(self, branch: str) -> dict:
-        if not VALID_BRANCH_RE.match(branch):
+        if not self.is_valid_branch_name(branch):
             return {"success": False, "stdout": "", "stderr": f"Invalid branch name: {branch}", "exit_code": -1}
         return self._run(["checkout", branch])
 
     def create_branch(self, name: str) -> dict:
-        if not VALID_BRANCH_RE.match(name):
+        if not self.is_valid_branch_name(name):
             return {"success": False, "stdout": "", "stderr": f"Invalid branch name: {name}", "exit_code": -1}
         return self._run(["checkout", "-b", name])
 

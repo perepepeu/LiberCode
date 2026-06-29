@@ -1487,6 +1487,22 @@ class LiberAgent:
     async def _run_git(self, *args: str) -> str:
         return await self._run_git_async(*args)
 
+    async def _run_external_cmd(self, *args: str) -> str:
+        import asyncio
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=self.shell.workdir,
+            )
+            stdout, _ = await proc.communicate()
+            return stdout.decode("utf-8", errors="replace").strip() or "(no output)"
+        except FileNotFoundError:
+            return f"Command not found: {args[0]}"
+        except Exception as e:
+            return f"Error running {args[0]}: {e}"
+
     def _tui_write_git_output(self, title: str, output: str, tui) -> None:
         t = tui.theme_data
         tui.write_output(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
@@ -1662,16 +1678,23 @@ class LiberAgent:
         push_out = await self._run_git("push", "-u", "origin", branch)
         tui.write_output(Text(f"  {push_out}\n", Style(color=t["muted"])))
 
-        body_escaped = body.replace('"', '\\"').replace('\n', '\\n')
-        gh_cmd = (
-            f'gh pr create --title "{title}" '
-            f'--body "{body_escaped[:500]}" --base {base}'
+        gh_args = [
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            title,
+            "--body",
+            body[:4000],
+            "--base",
+            base,
+        ]
+        tui._render_tool_result(
+            "shell",
+            f'gh pr create --title "{title}" --body <generated> --base {base}',
         )
-        tui._render_tool_result("shell", gh_cmd)
 
-        push_result = await self._run_git(
-            *(gh_cmd.split())
-        )
+        push_result = await self._run_external_cmd(*gh_args)
         if "https://github.com" in push_result:
             url = [w for w in push_result.split() if w.startswith("https://")][0]
             tui.write_output(Text(

@@ -119,3 +119,46 @@ class TestSlashCommands:
         asyncio.run(agent.handle_tui_command("memory", "", tui))
 
         assert tui.write_output.called
+
+    def test_tui_pr_uses_gh_external_command(self):
+        agent = make_agent(tempfile.mkdtemp())
+        agent.git.is_repo.return_value = True
+        agent.provider.chat_stream.return_value = iter([
+            "TITLE: Test PR\n\nBODY:\nBody text"
+        ])
+        tui = MagicMock()
+        tui.theme_data = {
+            "primary": "cyan",
+            "muted": "bright_black",
+            "success": "green",
+            "accent": "blue",
+        }
+        git_calls = []
+        external_calls = []
+
+        async def confirm(_question):
+            return True
+
+        async def fake_run_git(*args):
+            git_calls.append(args)
+            if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+                return "feature/test"
+            if args == ("rev-parse", "--verify", "main"):
+                return "main"
+            if args and args[0] == "push":
+                return "pushed"
+            return ""
+
+        async def fake_external(*args):
+            external_calls.append(args)
+            return "https://github.com/example/repo/pull/1"
+
+        agent._run_git = fake_run_git
+        agent._run_external_cmd = fake_external
+        tui.ask_confirm = confirm
+
+        asyncio.run(agent._tui_cmd_pr("", tui))
+
+        assert external_calls
+        assert external_calls[0][:3] == ("gh", "pr", "create")
+        assert not any(call and call[0] == "gh" for call in git_calls)
