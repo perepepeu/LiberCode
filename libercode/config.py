@@ -7,6 +7,7 @@ CONFIG_DIR = Path.home() / ".config" / "libercode"
 GLOBAL_CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DATA_DIR = CONFIG_DIR / "data"
 DEFAULT_MODE = "build"
+VALID_MODES = ("build", "plan", "spec", "debug")
 
 
 @dataclass
@@ -240,7 +241,7 @@ def first_run_wizard():
             cfg.provider.model = Prompt.ask("Model name")
 
     cfg.mode = Prompt.ask(
-        "Default working mode", choices=["build", "plan", "spec"], default="build"
+        "Default working mode", choices=list(VALID_MODES), default="build"
     )
 
     cfg.save_global()

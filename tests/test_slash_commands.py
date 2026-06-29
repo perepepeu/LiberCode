@@ -1,4 +1,5 @@
 import json
+import asyncio
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -100,3 +101,21 @@ class TestSlashCommands:
         agent.mode = "plan"
         result = agent._exec_shell("ls")
         assert "plan mode" in result.lower()
+
+    def test_tui_memory_command(self):
+        agent = make_agent(tempfile.mkdtemp())
+        agent.memory.all.return_value = [
+            {"key": "stack", "value": "python", "category": "project"}
+        ]
+        tui = MagicMock()
+        tui.theme_data = {
+            "primary": "cyan",
+            "accent": "blue",
+            "muted": "bright_black",
+            "text": "white",
+            "border": "bright_black",
+        }
+
+        asyncio.run(agent.handle_tui_command("memory", "", tui))
+
+        assert tui.write_output.called

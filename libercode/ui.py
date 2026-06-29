@@ -4,6 +4,8 @@ from rich.table import Table
 from rich import box
 from rich.text import Text
 
+from libercode.config import VALID_MODES
+
 
 class Renderer:
     def __init__(self, console: Console):
@@ -28,7 +30,7 @@ class Renderer:
         self.console.print()
 
     def context_bar(self, mode: str, provider_name: str, session_id: int):
-        mode_colors = {"build": "green", "plan": "yellow", "spec": "blue"}
+        mode_colors = {"build": "green", "plan": "yellow", "spec": "blue", "debug": "red"}
         color = mode_colors.get(mode, "white")
         bar = Text()
         bar.append(f" {mode.capitalize()} ", style=f"bold {color}")
@@ -66,7 +68,7 @@ class Renderer:
             ("checkpoint [summary]", "Save a checkpoint"),
             ("scratch <content>", "Write a quick note"),
             ("memory <key> = <value>", "Store in project memory"),
-            ("mode <build|plan|spec>", "Switch working mode"),
+            (f"mode <{'|'.join(VALID_MODES)}>", "Switch working mode"),
             ("agent:spawn <task>", "Spawn a sub-agent"),
         ]
         for cmd, desc in rows:
@@ -94,5 +96,5 @@ class Renderer:
         self.console.print("[bold]Slash commands:[/]")
         self.console.print(slash_table)
         self.console.print(
-            "[dim]Tip: Press Tab to cycle modes (build -> plan -> spec -> build)[/]"
+            f"[dim]Tip: Press Tab to cycle modes ({' -> '.join(VALID_MODES)} -> build)[/]"
         )

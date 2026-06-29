@@ -19,6 +19,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+from libercode.config import VALID_MODES
+
 THEMES = {
 
     # ── Dracula ────────────────────────────────────────────
@@ -972,7 +974,7 @@ class LibercodeUI(App):
         Binding("down",    "palette_down",  "down",    priority=True, show=False),
     ]
 
-    AGENT_MODES = ["build", "plan", "spec", "debug"]
+    AGENT_MODES = list(VALID_MODES)
 
     THEME_NAMES = list(THEMES.keys())
 

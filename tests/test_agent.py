@@ -79,6 +79,13 @@ class TestToolCallParser:
         result = agent._process_tool_call("just some text with no tool")
         assert result is None
 
+    def test_mode_tool_accepts_debug(self):
+        agent = make_agent(tempfile.mkdtemp())
+        result = agent._process_tool_call("mode debug")
+        assert result is None
+        assert agent.mode == "debug"
+        agent.store.session_update_mode.assert_called_once_with(1, "debug")
+
     def test_path_traversal_read_blocked(self):
         agent = make_agent(tempfile.mkdtemp())
         result = agent._read_file("../../../etc/passwd")

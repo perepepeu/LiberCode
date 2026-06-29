@@ -20,9 +20,9 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.input import create_input
 
-from libercode.config import LiberConfig
+from libercode.config import LiberConfig, VALID_MODES as CONFIG_VALID_MODES
 from libercode.providers import BuiltinProvider, CustomProvider, build_provider, PROVIDER_REGISTRY
-from libercode.providers.base import ProviderError
+from libercode.providers.base import BaseProvider, ProviderError
 from libercode.storage.sqlite_store import SqliteStore
 from libercode.shell import ShellExecutor
 from libercode.git_utils import GitHelper
@@ -71,7 +71,7 @@ class LiberAgent:
         except Exception:
             self._enc = tiktoken.get_encoding("cl100k_base")
 
-    def _init_provider(self) -> "BaseProvider":
+    def _init_provider(self) -> BaseProvider:
         pc = self.config.provider
         try:
             return build_provider(
@@ -282,11 +282,11 @@ class LiberAgent:
 
             if stripped.startswith("mode "):
                 new_mode = stripped[len("mode ") :].strip()
-                if new_mode in ("build", "plan", "spec"):
+                if new_mode in CONFIG_VALID_MODES:
                     self.mode = new_mode
                     self.store.session_update_mode(self.session_id, new_mode)
                     return None
-                return f"[Mode] Invalid mode. Use build, plan, or spec."
+                return f"[Mode] Invalid mode. Use {', '.join(CONFIG_VALID_MODES)}."
 
             if stripped.startswith("agent:spawn "):
                 task_desc = stripped[len("agent:spawn ") :].strip()
@@ -342,11 +342,11 @@ class LiberAgent:
             return self._exec_shell(f"git {body.strip()}")
         if name == "mode":
             new_mode = body.strip()
-            if new_mode in ("build", "plan", "spec"):
+            if new_mode in CONFIG_VALID_MODES:
                 self.mode = new_mode
                 self.store.session_update_mode(self.session_id, new_mode)
                 return None
-            return f"[Mode] Invalid mode. Use build, plan, or spec."
+            return f"[Mode] Invalid mode. Use {', '.join(CONFIG_VALID_MODES)}."
         if name == "agent:spawn":
             return self._spawn_subagent(body.strip())
         return None
@@ -649,11 +649,12 @@ class LiberAgent:
 
     def _make_pt_session(self):
         kb = KeyBindings()
-        mode_cycle = {"build": "plan", "plan": "spec", "spec": "build"}
+        modes = list(CONFIG_VALID_MODES)
 
         @kb.add("tab")
         def _(event):
-            new = mode_cycle[self.mode]
+            cur = modes.index(self.mode) if self.mode in modes else 0
+            new = modes[(cur + 1) % len(modes)]
             self.mode = new
             self.store.session_update_mode(self.session_id, new)
             event.app.current_buffer.text = ""
@@ -661,8 +662,8 @@ class LiberAgent:
 
         @kb.add("s-tab")
         def _(event):
-            rev = {"build": "spec", "plan": "build", "spec": "plan"}
-            new = rev[self.mode]
+            cur = modes.index(self.mode) if self.mode in modes else 0
+            new = modes[(cur - 1) % len(modes)]
             self.mode = new
             self.store.session_update_mode(self.session_id, new)
             event.app.current_buffer.text = ""
@@ -707,7 +708,9 @@ class LiberAgent:
         return ANSI(f"{ctx}\n{prompt}")
 
     def _mode_color_code(self):
-        return {"build": "32", "plan": "33", "spec": "34"}.get(self.mode, "37")
+        return {"build": "32", "plan": "33", "spec": "34", "debug": "31"}.get(
+            self.mode, "37"
+        )
 
     def run_interactive(self):
         with self.console.status("[dim]Starting session...[/]", spinner="dots"):
@@ -817,7 +820,7 @@ class LiberAgent:
         self.store.session_end(self.session_id, f"One-shot: {instruction[:50]}")
 
     def _mode_color(self):
-        return {"build": "green", "plan": "yellow", "spec": "blue"}.get(
+        return {"build": "green", "plan": "yellow", "spec": "blue", "debug": "red"}.get(
             self.mode, "white"
         )
 
@@ -1195,7 +1198,7 @@ class LiberAgent:
                     f"Available: {', '.join(self.available_models)}"
                 )
 
-    VALID_MODES = ["build", "plan", "spec", "debug"]
+    VALID_MODES = list(CONFIG_VALID_MODES)
 
     async def _tui_cmd_mode(self, args: str, tui) -> None:
         if not args:
@@ -1223,7 +1226,7 @@ class LiberAgent:
             ))
         else:
             for i, task in enumerate(tasks[:20]):
-                done  = task.get("status", "") == "done"
+                done  = task.get("status", "") in ("done", "completed")
                 icon  = "✓" if done else "○"
                 color = t["success"] if done else t["text"]
                 tui.write_output(Text(
@@ -1233,6 +1236,29 @@ class LiberAgent:
         self._tui_sep(tui)
         tui.write_output("\n")
         tui.refresh_status_bar()
+
+    async def _tui_cmd_memory(self, tui) -> None:
+        t = tui.theme_data
+        tui.write_output(Text("\n  Memory\n", Style(color=t["primary"], bold=True)))
+        self._tui_sep(tui)
+        items = self.memory.all()
+        if not items:
+            tui.write_output(Text(
+                "  No memory stored yet.\n",
+                Style(color=t["muted"])
+            ))
+        else:
+            for item in items[:20]:
+                key = item.get("key", "")
+                category = item.get("category", "general")
+                value = item.get("value", "")
+                line = Text()
+                line.append(f"  {key}", Style(color=t["accent"], bold=True))
+                line.append(f"  ({category})", Style(color=t["muted"]))
+                line.append(f": {value[:140]}", Style(color=t["text"]))
+                tui.write_output(line)
+        self._tui_sep(tui)
+        tui.write_output("\n")
 
     async def _tui_cmd_checkpoint(self, args: str, tui) -> None:
         from rich.text import Text

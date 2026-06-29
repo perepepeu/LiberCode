@@ -10,6 +10,7 @@ from libercode.config import (
     first_run_wizard,
     LiberConfig,
     GLOBAL_CONFIG_PATH,
+    VALID_MODES,
 )
 from libercode.agent import LiberAgent
 
@@ -184,7 +185,7 @@ def cmd_wizard(args):
 
 
 def cmd_mode(args):
-    if args.mode not in ("build", "plan", "spec", "debug"):
+    if args.mode not in VALID_MODES:
         console.print("[red]Mode must be build, plan, spec, or debug[/]")
         return
     cfg = ensure_config()
@@ -206,7 +207,7 @@ def main():
     )
     parser.add_argument("--version", action="store_true", help="Show version")
     parser.add_argument(
-        "--mode", choices=["build", "plan", "spec", "debug"], help="Working mode"
+        "--mode", choices=VALID_MODES, help="Working mode"
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
@@ -216,7 +217,7 @@ def main():
         "interactive", aliases=["i", "shell"], help="Start interactive session"
     )
     p_interactive.add_argument(
-        "--mode", choices=["build", "plan", "spec", "debug"], help="Working mode"
+        "--mode", choices=VALID_MODES, help="Working mode"
     )
     p_interactive.add_argument("--verbose", action="store_true", help="Verbose output")
 
@@ -227,7 +228,7 @@ def main():
         "instruction", nargs="*", help="Instruction (or pipe from stdin)"
     )
     p_exec.add_argument(
-        "--mode", choices=["build", "plan", "spec", "debug"], help="Working mode"
+        "--mode", choices=VALID_MODES, help="Working mode"
     )
 
     p_config = sub.add_parser("config", help="Configure LiberCode")
@@ -252,7 +253,7 @@ def main():
     p_wizard = sub.add_parser("wizard", help="Run first-time setup wizard")
 
     p_mode = sub.add_parser("mode", help="Set default working mode")
-    p_mode.add_argument("mode", choices=["build", "plan", "spec", "debug"], help="Working mode")
+    p_mode.add_argument("mode", choices=VALID_MODES, help="Working mode")
 
     args = parser.parse_args()
 
