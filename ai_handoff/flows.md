@@ -1,0 +1,314 @@
+# Detailed Flows
+
+## Installed Startup Flow
+
+Current installed console script:
+
+```text
+pyproject.toml
+  -> libercode = "libercode.__main__:main"
+  -> libercode/__main__.py main()
+  -> LiberConfig.load()
+  -> LibercodeUI(...)
+  -> app.run()
+```
+
+Problem: this path never creates `LiberAgent` and never calls `app.set_agent(agent)`. As a result, the installed `libercode` command opens a TUI that is not connected to the agent.
+
+The direct script path at the bottom of `libercode/tui.py` does this correctly:
+
+```text
+ensure_config()
+  -> LiberAgent(cfg)
+  -> LibercodeUI(...)
+  -> app.set_agent(agent)
+  -> app.run()
+```
+
+The argparse CLI path exists separately:
+
+```text
+libercode/cli.py main()
+  -> parse args
+  -> command handler
+  -> ensure_config()
+  -> LiberAgent(cfg)
+  -> run_interactive() or run_one_shot() or config/show action
+```
+
+Recommended repair: make `libercode.__main__:main` delegate to `libercode.cli.main`, then make the default no-command branch start the properly wired TUI or interactive flow.
+
+## TUI Message Flow
+
+```text
+LibercodeUI.on_input_submitted()
+  -> if slash command: dispatch command
+  -> else render user message
+  -> run worker
+  -> agent.handle_tui_message(text, tui)
+  -> build conversation history and system prompt
+  -> provider.chat_stream(...)
+  -> render chunks
+  -> process tool calls when present
+  -> persist history and update status
+```
+
+Key files:
+
+- `libercode/tui.py`
+- `libercode/agent.py`
+- `libercode/providers/*`
+- `libercode/storage/sqlite_store.py`
+
+Known gaps:
+
+- Missing `_tui_cmd_memory`.
+- Many broad `except Exception: pass` blocks in the TUI can hide failures.
+- Some async worker paths update UI and provider state without a single shared command contract.
+
+## TUI Slash Command Flow
+
+```text
+User enters "/command args"
+  -> LibercodeUI._dispatch_command_with_args()
+  -> agent.handle_tui_command(cmd, args, tui)
+  -> one of _tui_cmd_* handlers
+```
+
+Current command list lives in `libercode/tui.py` as `COMMANDS`.
+
+Important command risks:
+
+- `/memory`: routed but missing handler.
+- `/provider`: opens a modal for empty/list/setup; direct switching uses `_tui_provider_direct_switch`.
+- `/config`: reads and writes a TOML path, while the main app loads YAML.
+- `/pr`: uses Git helper to run a GitHub CLI command, likely producing `git gh pr create`.
+- `/restore`: validates restored paths with `is_relative_to`; legacy `/undo` does not.
+
+## Legacy Interactive Slash Command Flow
+
+```text
+agent.run_interactive()
+  -> prompt-toolkit input
+  -> if input starts with "/": _handle_slash_command()
+  -> else provider chat flow
+```
+
+This surface supports a smaller and different command set than the TUI. It handles `/memory`, `/tasks`, `/checkpoints`, `/scratch`, `/status`, `/undo`, `/context`, `/export`, `/import`, `/exit`, and `/quit`.
+
+Known drift:
+
+- Legacy `/undo` restores checkpoint files without the same path containment check used by TUI `/restore`.
+- Legacy `/mode` only prints the current mode, while TUI `/mode` changes modes.
+
+## Model Tool Call Flow
+
+The model can request tools in two forms.
+
+XML-like form:
+
+```text
+<tool name="shell">...</tool>
+<tool name="file:read">...</tool>
+<tool name="file:write">path
+content</tool>
+```
+
+Legacy line form:
+
+```text
+!command
+file:read path
+file:write path content
+file:edit path ||| old ||| new
+task:create title ||| description
+git status
+mode build
+agent:spawn task
+```
+
+Flow:
+
+```text
+agent._process_tool_call(response)
+  -> parse first matching tool call
+  -> _dispatch_tool(...) or direct branch
+  -> shell/file/git/task/checkpoint/memory/scratch/subagent method
+```
+
+Mode restrictions are not uniform:
+
+- `_exec_shell()` blocks plan mode.
+- `_edit_file()` blocks plan mode.
+- `_write_file()` does not explicitly block plan mode.
+- Tool `mode` only accepts `build`, `plan`, and `spec`, not `debug`.
+
+## File and Shell Flow
+
+Shell:
+
+```text
+agent._exec_shell(cmd)
+  -> ShellExecutor.run(cmd)
+  -> is_forbidden(cmd)
+  -> subprocess.run(..., shell=True)
+```
+
+Files:
+
+```text
+agent._read_file(path)
+  -> ShellExecutor.read_file(path)
+  -> agent validates returned real path
+```
+
+```text
+agent._write_file(path, content)
+  -> agent validates path
+  -> compute diff
+  -> optional TUI confirmation
+  -> write file
+  -> memory auto-store
+  -> optional checkpoint
+```
+
+Security note: `ShellExecutor` itself does not consistently enforce path containment. Put containment checks close to file I/O, not only in callers.
+
+## Config Flow
+
+Main load:
+
+```text
+LiberConfig.load()
+  -> read ~/.config/libercode/config.yaml if present
+  -> overlay project .libercoderc if present
+  -> resolve data_dir
+```
+
+CLI config:
+
+```text
+cli.py cmd_config()
+  -> LiberConfig.load()
+  -> mutate cfg
+  -> cfg.save_global()
+  -> writes YAML
+```
+
+TUI provider/config paths:
+
+```text
+agent._tui_cmd_config()
+  -> path ~/.config/libercode/config.toml
+  -> tomllib/toml parsing
+```
+
+```text
+LiberConfig.save_provider_config()
+  -> path ~/.config/libercode/config.toml
+  -> tomli_w dump
+```
+
+Problem: TOML writer packages are not current dependencies, and `LiberConfig.load()` does not read this TOML file.
+
+## Provider Flow
+
+```text
+agent._init_provider()
+  -> build_provider(
+       name=config.provider.name,
+       model=config.provider.model,
+       api_key=config.provider.api_key,
+       api_base=config.provider.api_base,
+       max_tokens=config.provider.max_tokens,
+       temperature=config.provider.temperature
+     )
+  -> provider.validate()
+  -> fallback to BuiltinProvider on ProviderError
+```
+
+Runtime switching:
+
+```text
+agent.swap_provider()
+  -> build_provider(...)
+  -> assign provider
+  -> stop_checker.set_provider()
+  -> save provider config
+```
+
+TUI also has provider switching logic in `LibercodeUI`, including API key modal and model modal. Consolidate these paths if possible.
+
+## Persistence Flow
+
+```text
+LiberAgent.__init__()
+  -> data_dir
+  -> SqliteStore(data_dir/libercode.db)
+  -> ProjectMemory(store)
+  -> TaskTracker(store)
+  -> ScratchNotes(store)
+  -> Checkpointer(store, project_root, git)
+```
+
+Session start:
+
+```text
+agent._init_session(project_root)
+  -> store.session_get_active(project_root)
+  -> resume active session if present
+  -> else store.session_start(project_root, mode)
+```
+
+History:
+
+```text
+store.history_append(session_id, role, content, mode)
+store.history_get(session_id, limit)
+```
+
+## Checkpoint Flow
+
+```text
+Checkpointer.save(summary)
+  -> _take_snapshot()
+  -> _git_snapshot()
+  -> store.checkpoint_save(...)
+```
+
+Snapshot limits:
+
+- Up to 50 `*.py` files.
+- Per-file limit: 50 KB.
+- Total limit: 2 MB.
+
+Restore paths:
+
+- TUI `/restore` checks `is_relative_to`.
+- Legacy `/undo` does not perform the same check.
+
+## Test and Lint Flow
+
+TUI `/test`:
+
+```text
+_detect_project_type()
+  -> command map
+  -> _run_cmd(...)
+  -> if failure keywords are present, ask provider to summarize
+```
+
+TUI `/lint`:
+
+```text
+_detect_project_type()
+  -> command map
+  -> _run_cmd(...)
+  -> if output is non-empty, ask provider for fixes
+```
+
+For this repo:
+
+- Test command: `python -m pytest --tb=short -q`
+- Lint command: `ruff check .`
+
