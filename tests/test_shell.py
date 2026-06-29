@@ -37,6 +37,14 @@ class TestShellExecutor:
         result = self.shell.read_file("nonexistent.txt")
         assert result["success"] is False
 
+    def test_read_file_blocks_path_traversal(self):
+        outside = os.path.join(os.path.dirname(self.tmpdir), "outside.txt")
+        with open(outside, "w") as f:
+            f.write("secret")
+        result = self.shell.read_file("../outside.txt")
+        assert result["success"] is False
+        assert "traversal" in result["error"].lower()
+
     def test_write_file(self):
         result = self.shell.write_file("new.txt", "hello world")
         assert result["success"] is True
@@ -44,6 +52,11 @@ class TestShellExecutor:
         assert os.path.exists(path)
         with open(path) as f:
             assert f.read() == "hello world"
+
+    def test_write_file_blocks_path_traversal(self):
+        result = self.shell.write_file("../outside.txt", "payload")
+        assert result["success"] is False
+        assert "traversal" in result["error"].lower()
 
     def test_edit_file(self):
         path = os.path.join(self.tmpdir, "edit.txt")
@@ -73,6 +86,11 @@ class TestShellExecutor:
         assert result["success"] is True
         assert "a.txt" in result["entries"]
         assert "subdir/" in result["entries"]
+
+    def test_list_files_blocks_path_traversal(self):
+        result = self.shell.list_files("..")
+        assert result["success"] is False
+        assert "traversal" in result["error"].lower()
 
     def test_forbidden_rm_rf_root(self):
         assert is_forbidden("rm -rf /") is True

@@ -96,6 +96,25 @@ class TestToolCallParser:
         result = agent._write_file("../../../tmp/evil.txt", "payload")
         assert "traversal blocked" in result.lower()
 
+    def test_write_file_blocked_in_plan_mode(self):
+        agent = make_agent(tempfile.mkdtemp())
+        agent.mode = "plan"
+        result = agent._write_file("safe.txt", "payload")
+        assert "plan mode" in result.lower()
+
+    def test_restore_snapshot_blocks_traversal(self):
+        tmpdir = tempfile.mkdtemp()
+        agent = make_agent(tmpdir)
+        agent.shell.workdir = Path(tmpdir)
+        restored, errors = agent._restore_snapshot_files({
+            "safe.txt": "ok",
+            "../evil.txt": "bad",
+        })
+        assert restored == 1
+        assert errors and "Blocked" in errors[0]
+        assert (Path(tmpdir) / "safe.txt").read_text() == "ok"
+        assert not (Path(tmpdir).parent / "evil.txt").exists()
+
     def test_path_traversal_read_safe(self):
         agent = make_agent(tempfile.mkdtemp())
         agent.shell.read_file.return_value = {

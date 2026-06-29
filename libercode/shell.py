@@ -1,6 +1,5 @@
 import subprocess
 import os
-import shlex
 from pathlib import Path
 
 FORBIDDEN_COMMANDS = [
@@ -34,12 +33,18 @@ class ShellExecutor:
     def __init__(self, workdir: str = "."):
         self.workdir = Path(workdir).resolve()
 
+    def _resolve_path(self, path: str) -> Path | None:
+        full_path = (self.workdir / path).resolve()
+        if not full_path.is_relative_to(self.workdir):
+            return None
+        return full_path
+
     def run(self, command: str, timeout: int = 120) -> dict:
         if is_forbidden(command):
             return {
                 "exit_code": -1,
                 "stdout": "",
-                "stderr": f"Command blocked: contains forbidden pattern",
+                "stderr": "Command blocked: contains forbidden pattern",
                 "success": False,
                 "blocked": True,
             }
@@ -75,10 +80,14 @@ class ShellExecutor:
             }
 
     def run_interactive(self, command: str) -> int:
+        if is_forbidden(command):
+            return -1
         return subprocess.call(command, shell=True, cwd=str(self.workdir))
 
     def read_file(self, path: str) -> dict:
-        full_path = self.workdir / path
+        full_path = self._resolve_path(path)
+        if full_path is None:
+            return {"success": False, "error": f"Path traversal blocked: {path}"}
         if not full_path.exists():
             return {"success": False, "error": f"File not found: {path}"}
         if not full_path.is_file():
@@ -90,7 +99,9 @@ class ShellExecutor:
             return {"success": False, "error": str(e)}
 
     def write_file(self, path: str, content: str) -> dict:
-        full_path = self.workdir / path
+        full_path = self._resolve_path(path)
+        if full_path is None:
+            return {"success": False, "error": f"Path traversal blocked: {path}"}
         full_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             full_path.write_text(content, encoding="utf-8")
@@ -112,7 +123,9 @@ class ShellExecutor:
         return self.write_file(path, new_content)
 
     def list_files(self, path: str = ".") -> dict:
-        full_path = (self.workdir / path).resolve()
+        full_path = self._resolve_path(path)
+        if full_path is None:
+            return {"success": False, "error": f"Path traversal blocked: {path}"}
         if not full_path.exists():
             return {"success": False, "error": f"Path not found: {path}"}
         try:
@@ -125,7 +138,9 @@ class ShellExecutor:
             return {"success": False, "error": str(e)}
 
     def grep(self, pattern: str, path: str = ".", include: str = "") -> dict:
-        full_path = (self.workdir / path).resolve()
+        full_path = self._resolve_path(path)
+        if full_path is None:
+            return {"success": False, "error": f"Path traversal blocked: {path}"}
         cmd = ["rg", "-n", pattern, str(full_path)]
         if include:
             cmd.extend(["-g", include])
@@ -141,7 +156,10 @@ class ShellExecutor:
             return {"success": False, "error": str(e)}
 
     def _grep_fallback(self, pattern: str, path: str, include: str) -> dict:
-        cmd = ["grep", "-rn", pattern, str(self.workdir / path)]
+        full_path = self._resolve_path(path)
+        if full_path is None:
+            return {"success": False, "error": f"Path traversal blocked: {path}"}
+        cmd = ["grep", "-rn", pattern, str(full_path)]
         if include:
             cmd.extend(["--include", include])
         try:

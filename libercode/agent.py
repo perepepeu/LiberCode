@@ -371,7 +371,7 @@ class LiberAgent:
         if result["success"]:
             real_path = Path(result.get("path", "")).resolve()
             workdir = Path(self.shell.workdir).resolve()
-            if not str(real_path).startswith(str(workdir)):
+            if not real_path.is_relative_to(workdir):
                 return f"[Error] Path traversal blocked: {path}"
             content = result["content"]
             if len(content) > 4000:
@@ -382,6 +382,9 @@ class LiberAgent:
     def _write_file(self, path: str, content: str) -> str:
         from pathlib import Path
         from libercode.differ import compute_diff
+
+        if self.mode == "plan":
+            return "[Error] Cannot write files in plan mode."
 
         full_path = Path(self.shell.workdir) / path
         if not full_path.resolve().is_relative_to(Path(self.shell.workdir).resolve()):
@@ -444,6 +447,23 @@ class LiberAgent:
             return f"[Scratch] Note #{nid}: {title.strip()}"
         nid = self.scratch.write(f"note_{int(time.time())}", content)
         return f"[Scratch] Note #{nid}"
+
+    def _restore_snapshot_files(self, files: dict) -> tuple[int, list[str]]:
+        restored = 0
+        errors = []
+        workdir = Path(self.shell.workdir).resolve()
+        for rel_path, content in files.items():
+            try:
+                full_path = (workdir / rel_path).resolve()
+                if not full_path.is_relative_to(workdir):
+                    errors.append(f"Blocked: {rel_path}")
+                    continue
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content, encoding="utf-8")
+                restored += 1
+            except Exception as e:
+                errors.append(f"{rel_path}: {e}")
+        return restored, errors
 
     def _spawn_subagent(self, task_desc: str) -> str:
         if self.mode == "plan":
@@ -567,13 +587,12 @@ class LiberAgent:
             latest = cps[0]
             snapshot = latest.get("snapshot", {})
             files = snapshot.get("files", {})
-            for rel_path, content in files.items():
-                full_path = Path(self.shell.workdir) / rel_path
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content, encoding="utf-8")
+            restored, errors = self._restore_snapshot_files(files)
             self.console.print(
-                f"[green]Restored {len(files)} files from checkpoint {latest['id']}[/]"
+                f"[green]Restored {restored} files from checkpoint {latest['id']}[/]"
             )
+            for err in errors:
+                self.console.print(f"[red]{err}[/]")
             return True
 
         if cmd == "/context":
@@ -1322,21 +1341,7 @@ class LiberAgent:
         if not files:
             tui.write_error(f"Checkpoint {target_id} has no file snapshot.")
             return
-        restored = 0
-        errors   = []
-        for rel_path, content in files.items():
-            try:
-                full_path = Path(self.shell.workdir) / rel_path
-                if not full_path.resolve().is_relative_to(
-                    Path(self.shell.workdir).resolve()
-                ):
-                    errors.append(f"Blocked: {rel_path}")
-                    continue
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content, encoding="utf-8")
-                restored += 1
-            except Exception as e:
-                errors.append(f"{rel_path}: {e}")
+        restored, errors = self._restore_snapshot_files(files)
         tui.write_output(Text(
             f"\n  ✓ Restored {restored} files from checkpoint {target_id}\n",
             Style(color=t["success"], bold=True)
