@@ -207,7 +207,7 @@ libercode/
 git clone https://github.com/perepepeu/LiberCode
 cd libercode
 pip install -e .
-python -m pytest tests/  # Run 57 tests
+python -m pytest tests/  # Run 69 tests
 libercode
 ```
 

@@ -1,6 +1,5 @@
 import asyncio
 import json
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +20,7 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.input import create_input
 
 from libercode.config import LiberConfig, VALID_MODES as CONFIG_VALID_MODES
-from libercode.providers import BuiltinProvider, CustomProvider, build_provider, PROVIDER_REGISTRY
+from libercode.providers import BuiltinProvider, build_provider
 from libercode.providers.base import BaseProvider, ProviderError
 from libercode.storage.sqlite_store import SqliteStore
 from libercode.shell import ShellExecutor
@@ -274,7 +273,7 @@ class LiberAgent:
                     key, val = content.split("=", 1)
                     self.memory.remember(key.strip(), val.strip())
                     return f"[Memory] Stored: {key.strip()}"
-                return f"[Memory] Key not found. Use `memory key = value`"
+                return "[Memory] Key not found. Use `memory key = value`"
 
             if stripped.startswith("git "):
                 cmd = stripped[len("git ") :].strip()
@@ -337,7 +336,7 @@ class LiberAgent:
                 key, val = content.split("=", 1)
                 self.memory.remember(key.strip(), val.strip())
                 return f"[Memory] Stored: {key.strip()}"
-            return f"[Memory] Key not found. Use `memory key = value`"
+            return "[Memory] Key not found. Use `memory key = value`"
         if name == "git":
             return self._exec_shell(f"git {body.strip()}")
         if name == "mode":
@@ -424,7 +423,7 @@ class LiberAgent:
             return "[Error] Cannot edit files in plan mode."
         result = self.shell.edit_file(path, old, new)
         if result["success"]:
-            self.memory.auto_store_context(f"edit:{path}", f"Edited (replaced text)")
+            self.memory.auto_store_context(f"edit:{path}", "Edited (replaced text)")
             return f"[File] Edited {path}"
         return f"[Error] {result.get('error', 'Edit failed')}"
 
@@ -714,7 +713,6 @@ class LiberAgent:
 
     def _pt_prompt_text(self):
         mc = self._mode_color_code()
-        mode_color = {"build": "32", "plan": "33", "spec": "34"}.get(self.mode, "37")
         ctx = (
             f"\x1b[2m"
             f"{self.mode.capitalize()} \x1b[0m\x1b[2m· \x1b[0m"
@@ -908,8 +906,6 @@ class LiberAgent:
             tui.write_error(f"Unknown command: /{cmd}")
 
     async def handle_tui_message(self, user_input: str, tui) -> None:
-        from rich.text import Text
-        from rich.style import Style
         import asyncio
 
         self.tui_ui = tui
@@ -921,7 +917,6 @@ class LiberAgent:
         history  = self.store.history_get(self.session_id, limit=30)
         messages = self._build_messages(user_input, history)
         system   = self._system_prompt()
-        t        = tui.theme_data
 
         # Show AI header immediately
         tui.render_ai_header(self.provider.name)
@@ -1508,11 +1503,16 @@ class LiberAgent:
         tui.write_output(Text(f"\n  {title}\n", Style(color=t["primary"], bold=True)))
         self._tui_sep(tui)
         for line in output.splitlines():
-            if line.startswith(("M ", " M")):   color = t.get("warning", "#f1fa8c")
-            elif line.startswith(("A ", " A")): color = t["success"]
-            elif line.startswith(("D ", " D")): color = t["error"]
-            elif line.startswith("??"):          color = t["muted"]
-            else:                                color = t["text"]
+            if line.startswith(("M ", " M")):
+                color = t.get("warning", "#f1fa8c")
+            elif line.startswith(("A ", " A")):
+                color = t["success"]
+            elif line.startswith(("D ", " D")):
+                color = t["error"]
+            elif line.startswith("??"):
+                color = t["muted"]
+            else:
+                color = t["text"]
             tui.write_output(Text(f"  {line}", Style(color=color)))
         self._tui_sep(tui)
         tui.write_output("\n")
@@ -1630,7 +1630,6 @@ class LiberAgent:
         )
 
         import asyncio
-        import queue as _queue
         q: asyncio.Queue = asyncio.Queue()
 
         def _gen():
@@ -1689,10 +1688,8 @@ class LiberAgent:
             "--base",
             base,
         ]
-        tui._render_tool_result(
-            "shell",
-            f'gh pr create --title "{title}" --body <generated> --base {base}',
-        )
+        gh_preview = f'gh pr create --title "{title}" --body <generated> --base {base}'
+        tui._render_tool_result("shell", gh_preview)
 
         push_result = await self._run_external_cmd(*gh_args)
         if "https://github.com" in push_result:
@@ -1703,15 +1700,11 @@ class LiberAgent:
             ))
         else:
             tui.write_output(Text(
-                f"\n  Pushed. Run:\n  {gh_cmd}\n",
+                f"\n  Pushed. Run:\n  {gh_preview}\n",
                 Style(color=t["accent"])
             ))
 
     async def _tui_cmd_review(self, tui) -> None:
-        from rich.text import Text
-        from rich.style import Style
-        t = tui.theme_data
-
         if not self.git.is_repo():
             tui.write_error("Not a git repository.")
             return
@@ -1738,13 +1731,20 @@ class LiberAgent:
 
     def _detect_project_type(self) -> str:
         root = Path(self.shell.workdir)
-        if (root / "Cargo.toml").exists():        return "rust"
-        if (root / "package.json").exists():      return "node"
-        if (root / "pyproject.toml").exists():    return "python"
-        if (root / "setup.py").exists():          return "python"
-        if (root / "requirements.txt").exists():  return "python"
-        if (root / "go.mod").exists():            return "go"
-        if (root / "pom.xml").exists():           return "java"
+        if (root / "Cargo.toml").exists():
+            return "rust"
+        if (root / "package.json").exists():
+            return "node"
+        if (root / "pyproject.toml").exists():
+            return "python"
+        if (root / "setup.py").exists():
+            return "python"
+        if (root / "requirements.txt").exists():
+            return "python"
+        if (root / "go.mod").exists():
+            return "go"
+        if (root / "pom.xml").exists():
+            return "java"
         return "unknown"
 
     async def _run_cmd(self, *args: str) -> str:
@@ -1764,10 +1764,6 @@ class LiberAgent:
             return f"Error running {args[0]}: {e}"
 
     async def _tui_cmd_test(self, args: str, tui) -> None:
-        from rich.text import Text
-        from rich.style import Style
-        t = tui.theme_data
-
         project = self._detect_project_type()
         cmd_map = {
             "python": ["python", "-m", "pytest", "--tb=short", "-q"],
@@ -1801,10 +1797,6 @@ class LiberAgent:
             await self.handle_tui_message(summary_prompt, tui)
 
     async def _tui_cmd_lint(self, args: str, tui) -> None:
-        from rich.text import Text
-        from rich.style import Style
-        t = tui.theme_data
-
         project = self._detect_project_type()
         cmd_map = {
             "python": ["ruff", "check", "."],
@@ -1927,7 +1919,7 @@ class LiberAgent:
         from rich.text import Text
         from rich.style import Style
         from libercode.providers.registry import (
-            PROVIDER_REGISTRY, build_provider
+            PROVIDER_REGISTRY
         )
         from libercode.providers.base import ProviderError
         t = tui.theme_data

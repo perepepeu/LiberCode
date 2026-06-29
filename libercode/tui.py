@@ -3,7 +3,6 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from rich.align import Align
 from rich.markdown import Markdown as RichMarkdown
 from rich.panel import Panel
 from rich.style import Style
@@ -410,13 +409,10 @@ class ProviderModal(ModalScreen):
 
             if status == "active":
                 icon  = "▶"
-                color = "accent"
             elif status == "ready":
                 icon  = "✓"
-                color = "success"
             else:
                 icon  = "○"
-                color = "muted"
 
             line = Text()
             line.append(f"  {icon} ", Style(bold=True))
@@ -1569,8 +1565,6 @@ class LibercodeUI(App):
     def render_ai_response(self, full_text: str) -> None:
         from rich.text import Text as RText
         from rich.style import Style
-        from rich.syntax import Syntax
-        from rich.markdown import Markdown as RichMarkdown
         from rich.panel import Panel
         from rich.rule import Rule
         import re
@@ -1660,7 +1654,6 @@ class LibercodeUI(App):
     def _render_tool_result(self, tool_name: str, result: str) -> None:
         from rich.text import Text
         from rich.style import Style
-        from rich.panel import Panel
         from rich.syntax import Syntax
 
         log = self.query_one("#chat-log", RichLog)
@@ -1702,7 +1695,6 @@ class LibercodeUI(App):
 
     def _render_diff_panel(self, path: str, diff_lines) -> None:
         """Render a diff panel in the chat log."""
-        from rich.panel import Panel
         from libercode.differ import render_diff
         t = self.theme_data
         log = self.query_one("#chat-log", RichLog)
@@ -1860,7 +1852,6 @@ class LibercodeUI(App):
 
     def _show_welcome(self) -> None:
         """Show welcome panel on startup."""
-        from rich.panel import Panel
         from datetime import datetime
         t   = self.theme_data
         log = self.query_one("#chat-log", RichLog)
@@ -1901,7 +1892,7 @@ class LibercodeUI(App):
                     tk for tk in agent.tasks.list()
                     if tk.get("status", "") != "done"
                 ]
-                body.append(f"  Pending tasks  ", Style(color=t["text"]))
+                body.append("  Pending tasks  ", Style(color=t["text"]))
                 body.append(str(len(pending)), Style(color=t["accent"], bold=True))
                 body.append("\n")
             except Exception:
@@ -1911,15 +1902,15 @@ class LibercodeUI(App):
                 if agent.git.is_repo():
                     status = agent.git.run("status", "--short")
                     n_files = len([
-                        l for l in status.splitlines() if l.strip()
+                        line for line in status.splitlines() if line.strip()
                     ])
-                    body.append(f"  Modified files  ", Style(color=t["text"]))
+                    body.append("  Modified files  ", Style(color=t["text"]))
                     body.append(str(n_files), Style(color=t["accent"], bold=True))
                     body.append("\n")
             except Exception:
                 pass
 
-            body.append(f"\n  Active mode  ", Style(color=t["text"]))
+            body.append("\n  Active mode  ", Style(color=t["text"]))
             body.append(agent.mode, Style(color=t["secondary"], bold=True))
             body.append("\n")
 
@@ -2061,8 +2052,7 @@ class LibercodeUI(App):
         bar.append(" · ", Style(color=t["border"]))
 
         try:
-            task_count = len(agent.tasks.list()) if agent else 0
-            pending    = sum(
+            pending = sum(
                 1 for t2 in agent.tasks.list()
                 if t2.get("status", "") != "done"
             ) if agent else 0

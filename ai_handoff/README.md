@@ -21,7 +21,7 @@ Run from the repository root:
 python -m pytest -q
 ```
 
-Current focused checks have been expanded for entrypoint, config, mode, memory, path containment, branch validation, and PR creation. Run the full suite before release.
+Current result: 69 passed.
 
 ```bash
 python -m compileall -q libercode tests
@@ -33,7 +33,7 @@ Current result: passed.
 ruff check .
 ```
 
-Previous result: failed with 91 lint findings, 50 auto-fixable. Some meaningful issues have been fixed, but run `ruff check .` again before release.
+Current result: passed.
 
 ## Read These First
 

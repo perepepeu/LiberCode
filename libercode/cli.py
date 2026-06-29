@@ -1,6 +1,5 @@
 import sys
 import argparse
-from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -250,7 +249,7 @@ def main():
     p_show.add_argument("--sessions", action="store_true", help="Show past sessions")
     p_show.add_argument("--summary", action="store_true", help="Show project summary")
 
-    p_wizard = sub.add_parser("wizard", help="Run first-time setup wizard")
+    sub.add_parser("wizard", help="Run first-time setup wizard")
 
     p_mode = sub.add_parser("mode", help="Set default working mode")
     p_mode.add_argument("mode", choices=VALID_MODES, help="Working mode")

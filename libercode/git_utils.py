@@ -117,17 +117,19 @@ class GitHelper:
 
         status = self.status()
         if status["success"] and status["stdout"]:
+            status_lines = status["stdout"].split("\n")
             modified = [
-                l
-                for l in status["stdout"].split("\n")
-                if l.startswith(" M") or (len(l) > 1 and l[0] == " " and l[1] == "M")
+                line
+                for line in status_lines
+                if line.startswith(" M")
+                or (len(line) > 1 and line[0] == " " and line[1] == "M")
             ]
             staged = [
-                l
-                for l in status["stdout"].split("\n")
-                if l.startswith("M ")
+                line
+                for line in status_lines
+                if line.startswith("M ")
             ]
-            untracked = [l for l in status["stdout"].split("\n") if l.startswith("?")]
+            untracked = [line for line in status_lines if line.startswith("?")]
             if modified:
                 lines.append(f"Modified: {len(modified)} file(s)")
             if staged:
@@ -140,7 +142,7 @@ class GitHelper:
         log = self.log(3)
         if log["success"] and log["stdout"]:
             lines.append("Recent commits:")
-            for l in log["stdout"].split("\n"):
-                lines.append(f"  {l}")
+            for line in log["stdout"].split("\n"):
+                lines.append(f"  {line}")
 
         return "\n".join(lines)

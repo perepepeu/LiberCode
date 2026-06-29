@@ -20,7 +20,7 @@ class TestCheckpointer:
 
     def test_restore_calls_store(self):
         self.store.checkpoint_get.return_value = {"id": "cp_1", "files": {}}
-        result = self.checkpointer.restore("cp_1")
+        self.checkpointer.restore("cp_1")
         self.store.checkpoint_get.assert_called_once_with("cp_1")
 
     def test_take_snapshot_limits_file_size(self):

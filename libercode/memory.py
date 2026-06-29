@@ -1,6 +1,5 @@
 from typing import Optional
 from datetime import datetime
-from libercode.storage.sqlite_store import SqliteStore
 
 
 class ProjectMemory:

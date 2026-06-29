@@ -1,4 +1,3 @@
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -40,13 +39,13 @@ class TestToolCallParser:
     def test_xml_shell(self):
         agent = make_agent(tempfile.mkdtemp())
         text = '<tool name="shell">echo test</tool>'
-        result = agent._process_tool_call(text)
+        agent._process_tool_call(text)
         agent.shell.run.assert_called_once_with("echo test")
 
     def test_xml_file_read(self):
         agent = make_agent(tempfile.mkdtemp())
         text = '<tool name="file:read">test.txt</tool>'
-        result = agent._process_tool_call(text)
+        agent._process_tool_call(text)
         agent.shell.read_file.assert_called_once_with("test.txt")
 
     def test_xml_file_write(self):
@@ -61,17 +60,17 @@ class TestToolCallParser:
     def test_xml_file_edit(self):
         agent = make_agent(tempfile.mkdtemp())
         text = '<tool name="file:edit">test.txt ||| old ||| new</tool>'
-        result = agent._process_tool_call(text)
+        agent._process_tool_call(text)
         agent.shell.edit_file.assert_called_once_with("test.txt", "old", "new")
 
     def test_legacy_shell(self):
         agent = make_agent(tempfile.mkdtemp())
-        result = agent._process_tool_call("!ls -la")
+        agent._process_tool_call("!ls -la")
         agent.shell.run.assert_called_once_with("ls -la")
 
     def test_legacy_file_read(self):
         agent = make_agent(tempfile.mkdtemp())
-        result = agent._process_tool_call("file:read test.txt")
+        agent._process_tool_call("file:read test.txt")
         agent.shell.read_file.assert_called_once_with("test.txt")
 
     def test_no_tool_call(self):

@@ -1,5 +1,4 @@
 import json
-import requests
 from typing import Optional, Generator
 from libercode.providers.base import BaseProvider, ProviderError, request_with_retry
 

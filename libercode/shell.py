@@ -147,7 +147,7 @@ class ShellExecutor:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode in (0, 1):
-                lines = [l for l in result.stdout.split("\n") if l.strip()]
+                lines = [line for line in result.stdout.split("\n") if line.strip()]
                 return {"success": True, "matches": lines}
             return {"success": False, "error": result.stderr}
         except FileNotFoundError:
@@ -164,7 +164,7 @@ class ShellExecutor:
             cmd.extend(["--include", include])
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            lines = [l for l in result.stdout.split("\n") if l.strip()]
+            lines = [line for line in result.stdout.split("\n") if line.strip()]
             return {"success": True, "matches": lines}
         except Exception as e:
             return {"success": False, "error": str(e)}

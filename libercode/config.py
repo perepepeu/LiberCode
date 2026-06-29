@@ -189,7 +189,7 @@ class LiberConfig:
 def first_run_wizard():
     from rich.console import Console
     from rich.panel import Panel
-    from rich.prompt import Prompt, Confirm
+    from rich.prompt import Prompt
 
     console = Console()
     console.print(

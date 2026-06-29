@@ -11,7 +11,7 @@ python -m pytest -q
 Expected current result:
 
 ```text
-57 passed
+69 passed
 ```
 
 ```bash
@@ -24,7 +24,7 @@ Expected current result: no output and exit code 0.
 ruff check .
 ```
 
-Expected current result: failing lint until cleanup is done.
+Expected current result: no output other than `All checks passed!`.
 
 ## Current Test Coverage Shape
 
@@ -63,16 +63,12 @@ Expected current result: failing lint until cleanup is done.
 6. Checkpoint tests:
    - Restore handles malformed snapshots gracefully.
 
-## Lint Cleanup Strategy
+## Lint Maintenance Strategy
 
-1. Run `ruff check . --fix` after reviewing the diff.
-2. Manually handle unresolved issues:
-   - `F821` unresolved names.
-   - `F811` redefinitions caused by duplicated imports.
-   - `E701` multiple statements on one line.
-   - `F841` unused locals that may signal incomplete logic.
-3. Re-run tests after every batch.
-4. Add lint to CI only after the baseline is clean.
+1. Run `ruff check .` before commits that touch Python code.
+2. Use `ruff check . --fix` for safe mechanical cleanup when the diff is reviewed.
+3. Re-run tests after any lint cleanup.
+4. Add lint to CI to keep the baseline clean.
 
 ## Manual Smoke Checklist
 

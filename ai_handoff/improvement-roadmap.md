@@ -15,6 +15,7 @@ These items were addressed after the initial audit:
 - `/undo` and `/restore` share safe snapshot restore logic.
 - `/pr` uses `gh pr create` through an external command helper.
 - Branch validation uses `git check-ref-format --branch`.
+- `ruff check .` passes.
 
 ## Phase 1: Split Large Files
 
@@ -59,20 +60,20 @@ Acceptance:
 - Provider switch failure explains whether it was validation, missing API key, config save, or model fetch.
 - TUI worker exceptions are visible in a controlled way.
 
-## Phase 3: Finish Lint Baseline
+## Phase 3: Keep Lint in CI
 
-Goal: make static checks useful enough for CI.
+Goal: keep the clean static-check baseline from regressing.
 
 Tasks:
 
-- Run `ruff check . --fix` and review the diff.
-- Manually handle remaining issues, especially unused imports, redefinitions, broad one-line conditionals, and ambiguous variables.
-- Add a lint command to CI once the baseline is clean.
+- Add a lint command to CI.
+- Keep using `ruff check .` before Python commits.
+- Review any `ruff --fix` diff before committing.
 
 Acceptance:
 
 - `ruff check .` exits 0.
-- The full test suite still passes after lint cleanup.
+- CI fails when lint regresses.
 
 ## Phase 4: Tighten Shell Policy
 

@@ -1,4 +1,3 @@
-import os
 import subprocess
 import tempfile
 from libercode.git_utils import GitHelper, VALID_BRANCH_RE
